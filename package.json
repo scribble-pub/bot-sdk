@@ -1,0 +1,45 @@
+{
+  "name": "@scribble-pub/bot-sdk",
+  "version": "0.1.0",
+  "description": "The official Scribble.pub TypeScript bot SDK.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/scribble-pub/bot-sdk.git"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "type": "module",
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "devDependencies": {
+    "@biomejs/biome": "2.5.7",
+    "@hono/node-server": "^2.1.0",
+    "@types/node": "^26.2.0",
+    "hono": "^4.13.1",
+    "tsdown": "^0.22.14",
+    "tsx": "^4.23.11",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
+  },
+  "dependencies": {
+    "zod": "^4.4.3"
+  },
+  "scripts": {
+    "dev": "tsx examples/local-server.ts",
+    "build": "tsdown src/index.mts",
+    "test": "vitest run",
+    "lint": "biome check .",
+    "format": "biome format --write ."
+  }
+}
