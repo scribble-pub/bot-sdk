@@ -1,6 +1,6 @@
 import { Hono } from "hono"
-import { describe, expect, it } from "vitest"
-import ScribblePubBot from "../src/index.mjs"
+import { afterEach, describe, expect, it, vi } from "vitest"
+import ScribblePubBot, { ScribblePubApiError } from "../src/index.mjs"
 import type { HookRequest, HookResponse } from "../src/schemas.js"
 
 const TOKEN = "test-secret-token"
@@ -184,5 +184,83 @@ describe("scribble.pub bot with Hono", () => {
         expect(data.details).toEqual(
             expect.arrayContaining([expect.objectContaining({ path: "actions.0.text" })]),
         )
+    })
+})
+
+describe("registerWebhook", () => {
+    afterEach(() => {
+        vi.unstubAllGlobals()
+    })
+
+    function stubFetch(response: Response) {
+        const fetchMock = vi.fn<typeof fetch>(async () => response)
+        vi.stubGlobal("fetch", fetchMock)
+        return fetchMock
+    }
+
+    it("posts the URL to the register endpoint with the bot token", async () => {
+        const fetchMock = stubFetch(Response.json({ ok: true }))
+        const bot = new ScribblePubBot({ token: TOKEN })
+
+        await bot.registerWebhook("https://example.com/hook")
+
+        expect(fetchMock).toHaveBeenCalledTimes(1)
+        const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+        expect(url).toBe("https://scribble.pub/api/v0/bot/webhook/register")
+        expect(init.method).toBe("POST")
+        expect(new Headers(init.headers).get("authorization")).toBe(`Bearer ${TOKEN}`)
+        expect(JSON.parse(init.body as string)).toEqual({ url: "https://example.com/hook" })
+    })
+
+    it("targets a custom baseUrl and trims its trailing slash", async () => {
+        const fetchMock = stubFetch(Response.json({ ok: true }))
+        const bot = new ScribblePubBot({ token: TOKEN, baseUrl: "http://localhost:8080/" })
+
+        await bot.registerWebhook("http://localhost:3005/webhook")
+
+        expect(fetchMock.mock.calls[0]?.[0]).toBe(
+            "http://localhost:8080/api/v0/bot/webhook/register",
+        )
+    })
+
+    it("rejects a malformed URL without hitting the network", async () => {
+        const fetchMock = stubFetch(Response.json({ ok: true }))
+        const bot = new ScribblePubBot({ token: TOKEN })
+
+        await expect(bot.registerWebhook("not-a-url")).rejects.toThrow(/invalid webhook URL/)
+        await expect(bot.registerWebhook("ftp://example.com/hook")).rejects.toThrow(
+            /invalid webhook URL/,
+        )
+        expect(fetchMock).not.toHaveBeenCalled()
+    })
+
+    it("throws a ScribblePubApiError carrying the platform's status and body", async () => {
+        stubFetch(
+            new Response("Bad Request: url must start with http:// or https://\n", {
+                status: 400,
+                headers: { "Content-Type": "text/plain; charset=utf-8" },
+            }),
+        )
+        const bot = new ScribblePubBot({ token: TOKEN })
+
+        const error = await bot.registerWebhook("https://example.com/hook").catch((e) => e)
+
+        expect(error).toBeInstanceOf(ScribblePubApiError)
+        expect(error.status).toBe(400)
+        expect(error.body).toBe("Bad Request: url must start with http:// or https://")
+        expect(error.message).toBe(
+            "failed to register webhook: 400 Bad Request: url must start with http:// or https://",
+        )
+    })
+
+    it("falls back to the status text when the error body is empty", async () => {
+        stubFetch(new Response("", { status: 502, statusText: "Bad Gateway" }))
+        const bot = new ScribblePubBot({ token: TOKEN })
+
+        const error = await bot.registerWebhook("https://example.com/hook").catch((e) => e)
+
+        expect(error).toBeInstanceOf(ScribblePubApiError)
+        expect(error.status).toBe(502)
+        expect(error.body).toBe("Bad Gateway")
     })
 })

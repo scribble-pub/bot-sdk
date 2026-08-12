@@ -52,6 +52,36 @@ app.post("/webhook", async (c) => {
 
 See [`examples/local-server.ts`](./examples/local-server.ts) for a complete, runnable server.
 
+## Registering your webhook URL
+
+Once your server is reachable, tell the platform where to send hooks. `registerWebhook` POSTs to `/api/v0/bot/webhook/register`, authenticating with your bot token, and replaces whatever URL was registered before.
+
+```typescript
+await bot.registerWebhook("https://example.com/hook")
+```
+
+The URL must be an absolute `http` or `https` URL — anything else throws locally, before a request goes out. If the platform rejects the registration, the SDK throws a `ScribblePubApiError` carrying the HTTP `status` and the plain-text `body` of the response:
+
+```typescript
+import ScribblePubBot, { ScribblePubApiError } from "@scribble-pub/bot-sdk"
+
+try {
+    await bot.registerWebhook(process.env.PUBLIC_URL)
+} catch (err) {
+    if (err instanceof ScribblePubApiError) {
+        // e.g. 400 "Bad Request: url must start with http:// or https://"
+        console.error(`Registration failed (${err.status}): ${err.body}`)
+    }
+    throw err
+}
+```
+
+Calls to the platform go to `https://scribble.pub` by default. Use `baseUrl` to point them anywhere else.
+
+```typescript
+const bot = new ScribblePubBot({ token: process.env.BOT_TOKEN, baseUrl: "http://localhost:8080" })
+```
+
 ## Security (HMAC-SHA256 Signatures)
 
 Webhooks are public endpoints, which means anyone can send POST requests to your server. 

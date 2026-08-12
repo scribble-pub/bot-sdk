@@ -40,6 +40,17 @@ export type HookRequest = {
 }
 
 /**
+ * Payload to register or update the bot's webhook URL dynamically.
+ * This is what the SDK sends to `POST /api/v0/bot/webhook/register`.
+ */
+export type RegisterWebhookPayload = {
+    /**
+     * The absolute `http`/`https` URL the platform should POST hooks to.
+     */
+    url: string
+}
+
+/**
  * Tells the platform to post a new chat message into the room as the bot.
  */
 export type AddMessagePayload = {
@@ -71,6 +82,11 @@ const TriggerSchema: z.ZodType<Trigger> = z.object({
 
 const HookRequestSchema: z.ZodType<HookRequest> = z.object({
     trigger: TriggerSchema,
+})
+
+const RegisterWebhookPayloadSchema: z.ZodType<RegisterWebhookPayload> = z.object({
+    // `http` stays allowed so a local platform instance can be pointed at localhost without a tunnel.
+    url: z.url({ protocol: /^https?$/ }),
 })
 
 const ActionSchema: z.ZodType<Action> = z.object({
@@ -108,6 +124,19 @@ export function parseHookRequest(
     data: unknown,
 ): { success: true; data: HookRequest } | { success: false; errors: ValidationError[] } {
     const result = HookRequestSchema.safeParse(data)
+    return result.success
+        ? { success: true, data: result.data }
+        : { success: false, errors: toValidationErrors(result.error.issues) }
+}
+
+/**
+ * Validates a webhook URL before it is sent to the platform, so an obviously bad
+ * value fails locally with a clear message instead of as an opaque 400 from the API.
+ */
+export function parseRegisterWebhookPayload(
+    data: unknown,
+): { success: true; data: RegisterWebhookPayload } | { success: false; errors: ValidationError[] } {
+    const result = RegisterWebhookPayloadSchema.safeParse(data)
     return result.success
         ? { success: true, data: result.data }
         : { success: false, errors: toValidationErrors(result.error.issues) }
