@@ -1,5 +1,3 @@
-import { z } from "zod"
-
 /**
  * The specific event that caused this webhook to fire.
  * Currently, this only fires when a user explicitly tags your bot (e.g., "@HelloBot").
@@ -29,10 +27,16 @@ export type Trigger = {
      * The username of the user who triggered the hook.
      */
     username: string
+
+    /**
+     * The base API URL for this room's host instance (e.g., "https://eu.scribble.pub").
+     * Use it for a faster way to reach the target room, avoiding intermediate redirects.
+     */
+    directUrl: string
 }
 
 /**
- * The exact JSON payload sent by the scribble.pub server when an event occurs in a room.
+ * The exact JSON payload sent by a scribble.pub server when an event occurs in a room.
  * This is what your bot's HTTP server receives in the request body.
  */
 export type HookRequest = {
@@ -72,84 +76,12 @@ export type HookResponse = {
     actions: Action[]
 }
 
-const TriggerSchema: z.ZodType<Trigger> = z.object({
-    trigger: z.literal("chat.mention"),
-    room: z.string(),
-    timestamp: z.number(),
-    text: z.string(),
-    username: z.string(),
-})
-
-const HookRequestSchema: z.ZodType<HookRequest> = z.object({
-    trigger: TriggerSchema,
-})
-
-const RegisterWebhookPayloadSchema: z.ZodType<RegisterWebhookPayload> = z.object({
-    // `http` stays allowed so a local platform instance can be pointed at localhost without a tunnel.
-    url: z.url({ protocol: /^https?$/ }),
-})
-
-const ActionSchema: z.ZodType<Action> = z.object({
-    type: z.literal("addMessage"),
-    text: z.string(),
-})
-
-const HookResponseSchema: z.ZodType<HookResponse> = z.object({
-    actions: z.array(ActionSchema),
-})
-
 /**
- * A single validation failure, in a plain shape independent of the underlying
- * validation library — consumers never need to know it's produced by Zod.
+ * The JSON body returned with any non-2xx response from the API.
  */
-export type ValidationError = {
-    /** Dot-separated path to the offending field, e.g. "trigger.timestamp". */
-    path: string
-    message: string
-}
-
-function toValidationErrors(issues: z.core.$ZodIssue[]): ValidationError[] {
-    return issues.map((issue) => ({
-        path: issue.path.join("."),
-        message: issue.message,
-    }))
-}
-
-/**
- * Validates an incoming webhook body against the {@link HookRequest} shape.
- * Kept as a plain function (rather than exporting the Zod schema) so consumers
- * never need `zod` in their own code — it stays an internal implementation detail.
- */
-export function parseHookRequest(
-    data: unknown,
-): { success: true; data: HookRequest } | { success: false; errors: ValidationError[] } {
-    const result = HookRequestSchema.safeParse(data)
-    return result.success
-        ? { success: true, data: result.data }
-        : { success: false, errors: toValidationErrors(result.error.issues) }
-}
-
-/**
- * Validates a webhook URL before it is sent to the platform, so an obviously bad
- * value fails locally with a clear message instead of as an opaque 400 from the API.
- */
-export function parseRegisterWebhookPayload(
-    data: unknown,
-): { success: true; data: RegisterWebhookPayload } | { success: false; errors: ValidationError[] } {
-    const result = RegisterWebhookPayloadSchema.safeParse(data)
-    return result.success
-        ? { success: true, data: result.data }
-        : { success: false, errors: toValidationErrors(result.error.issues) }
-}
-
-/**
- * Validates the actions a bot handler returns against the {@link HookResponse} shape.
- */
-export function parseHookResponse(
-    actions: unknown,
-): { success: true; data: HookResponse } | { success: false; errors: ValidationError[] } {
-    const result = HookResponseSchema.safeParse({ actions })
-    return result.success
-        ? { success: true, data: result.data }
-        : { success: false, errors: toValidationErrors(result.error.issues) }
+export type ErrorResponse = {
+    /**
+     * A human-readable description of what went wrong, e.g. "Room is not found".
+     */
+    error: string
 }

@@ -15,7 +15,7 @@ const bot = new ScribblePubBot({
     baseUrl: process.env.API_BASE_URL,
 })
 
-bot.on("hook", async (req) => {
+bot.on("hook", (req) => {
     console.log(`[Bot] Received event: ${req}`)
     return [
         {
