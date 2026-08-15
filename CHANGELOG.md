@@ -65,8 +65,8 @@ Also:
   built-in room-to-instance table, which names production origins — without that, a locally
   pointed bot would reach past its own instance into production for any room listed there.
 - `ErrorResponse`, the `{ "error": string }` body the API returns with a non-2xx status.
-- `src/schemas.ts` now holds nothing but the wire types, so it now better serves as the Server API definition  
-  and can be read by human, script or an agent. Zod and the parsers moved to `src/internal/validation.ts`, 
+- `packages/bot-sdk/src/schemas.ts` now holds nothing but the wire types, so it now better serves as the Server API definition  
+  and can be read by human, script or an agent. Zod and the parsers moved to `packages/bot-sdk/src/internal/validation.ts`, 
   with `ValidationError` still exported from the package root.
 
 ## [0.1.0]

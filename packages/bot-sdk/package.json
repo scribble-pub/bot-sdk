@@ -1,0 +1,37 @@
+{
+    "name": "@scribble-pub/bot-sdk",
+    "version": "0.2.0",
+    "description": "The official Scribble.pub TypeScript bot SDK.",
+    "license": "MIT",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/scribble-pub/bot-sdk.git"
+    },
+    "publishConfig": {
+        "access": "public"
+    },
+    "type": "module",
+    "main": "./dist/index.mjs",
+    "types": "./dist/index.d.mts",
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.mts",
+            "import": "./dist/index.mjs"
+        }
+    },
+    "files": [
+        "dist"
+    ],
+    "devDependencies": {
+        "@hono/node-server": "^2.1.0",
+        "hono": "^4.13.1"
+    },
+    "dependencies": {
+        "zod": "^4.4.3"
+    },
+    "scripts": {
+        "dev": "tsx examples/local-server.ts",
+        "build": "tsdown src/index.mts",
+        "test": "vitest run"
+    }
+}
