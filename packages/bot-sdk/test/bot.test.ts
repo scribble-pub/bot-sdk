@@ -7,7 +7,7 @@ import ScribblePubBot, {
     ScribblePubValidationError,
     type ValidationError,
 } from "../src/index.mjs"
-import type { Action, HookRequest, HookResponse, Trigger } from "../src/schemas.js"
+import type { Action, HookRequest, HookResponse, Trigger } from "../src/index.mjs"
 
 const TOKEN = "test-secret-token"
 const AP = "https://ap.scribble.pub"
@@ -246,7 +246,10 @@ describe("registerWebhook", () => {
     })
 
     function stubFetch(response: Response) {
-        const fetchMock = vi.fn<typeof fetch>(async () => response)
+        const fetchMock = vi.fn<typeof fetch>(async (url) => {
+            if (!response.url) Object.defineProperty(response, "url", { value: url.toString() })
+            return response
+        })
         vi.stubGlobal("fetch", fetchMock)
         return fetchMock
     }
@@ -336,9 +339,10 @@ describe("sendActions", () => {
 
     function stubFetch(...responses: Response[]) {
         let call = 0
-        const fetchMock = vi.fn<typeof fetch>(async () => {
+        const fetchMock = vi.fn<typeof fetch>(async (url) => {
             const res = responses[Math.min(call, responses.length - 1)]
             call++
+            if (res && !res.url) Object.defineProperty(res, "url", { value: url.toString() })
             return res as Response
         })
         vi.stubGlobal("fetch", fetchMock)

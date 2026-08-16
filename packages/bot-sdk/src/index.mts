@@ -1,12 +1,15 @@
-import type { ValidationError } from "./internal/validation.js"
 import {
     parseHookRequest,
     parseHookResponse,
     parseRegisterWebhookPayload,
-} from "./internal/validation.js"
-import type { Action, ErrorResponse, HookRequest } from "./schemas.js"
+    verifySignature,
+    ScribblePubClient
+} from "@scribble-pub/api"
+import type { Action, ErrorResponse, HookRequest } from "@scribble-pub/api"
 
-export type { ValidationError } from "./internal/validation.js"
+import { ScribblePubApiError, ScribblePubValidationError } from "./errors.js"
+
+export type { ValidationError } from "@scribble-pub/api"
 
 export type {
     Action,
@@ -16,7 +19,9 @@ export type {
     HookResponse,
     RegisterWebhookPayload,
     Trigger,
-} from "./schemas.js"
+} from "@scribble-pub/api"
+
+export { ScribblePubApiError, ScribblePubValidationError }
 
 const DEFAULT_BASE_URL = "https://scribble.pub"
 
@@ -45,41 +50,6 @@ export type BotConfig = {
 }
 
 /**
- * Thrown when the API answers a bot-initiated request with a non-2xx status.
- * Carries the raw HTTP status and the error message.
- */
-export class ScribblePubApiError extends Error {
-    readonly status: number
-    readonly body: string
-
-    constructor(message: string, status: number, body: string) {
-        super(message)
-        this.name = "ScribblePubApiError"
-        this.status = status
-        this.body = body
-    }
-}
-
-/**
- * Thrown when arguments fail validation locally, before any request is sent.
- * `errors` lists every field that failed, so a caller can react to the specific problem
- * instead of matching on the message.
- *
- * Only outgoing requests cause this. {@link ScribblePubBot.handleHook} validates the
- * incoming payload and the actions a handler returns, but reports both as HTTP responses
- * (`400` and `500`) rather than by throwing, since it must always answer the platform.
- */
-export class ScribblePubValidationError extends Error {
-    readonly errors: ValidationError[]
-
-    constructor(message: string, errors: ValidationError[]) {
-        super(message)
-        this.name = "ScribblePubValidationError"
-        this.errors = errors
-    }
-}
-
-/**
  * You can return an immediate list of actions as a hook response.
  * If some async work is required, send a separate request with the actions by using {@link ScribblePubBot.sendActions},
  * because the platform has a 10-second timeout for hook responses.
@@ -93,7 +63,7 @@ type EventMap = {
 class ScribblePubBot {
     private handlers: Partial<{ [K in keyof EventMap]: EventMap[K] }> = {}
     private config: BotConfig
-    private readonly baseUrl: string
+    private readonly client: ScribblePubClient
 
     /**
      * Root instance lookup dictionary for different rooms.
@@ -107,9 +77,11 @@ class ScribblePubBot {
 
     constructor(config: BotConfig) {
         this.config = config
-        this.baseUrl = (config.baseUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, "")
+        const baseUrl = (config.baseUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, "")
+        
+        this.client = new ScribblePubClient(config.token, baseUrl)
 
-        if (this.baseUrl === DEFAULT_BASE_URL) {
+        if (baseUrl === DEFAULT_BASE_URL) {
             this.roomInstanceMap = new Map(Object.entries(DEFAULT_ROOM_INSTANCES))
         } else {
             this.roomInstanceMap = new Map()
@@ -140,18 +112,15 @@ class ScribblePubBot {
             )
         }
 
-        await this.post(
-            "register webhook",
-            `${this.baseUrl}/api/v0/bot/webhook/register`,
-            parsed.data,
-        )
+        const res = await this.client.registerWebhook(this.client.baseUrl, parsed.data)
+        await this.assertOk("register webhook", res)
     }
 
     /**
      * Sends the given actions, such as new chat messages, to the room.
      *
      * Internal notes: uses {@link ScribblePubBot.roomInstanceMap} to find the right region for the room.
-     * If there's no room instance for the given room, the {@link ScribblePubBot.baseUrl} will be used.
+     * If there's no room instance for the given room, the {@link BotConfig.baseUrl} will be used.
      * If it hits a redirect, the corresponding {@link ScribblePubBot.roomInstanceMap} entry will be created or updated with the new URL.
      *
      * @throws {ScribblePubValidationError} if `room` or `actions` fail validation.
@@ -174,9 +143,9 @@ class ScribblePubBot {
             )
         }
 
-        const origin = this.roomInstanceMap.get(key) ?? this.baseUrl
-        const path = `/api/v0/room/${encodeURIComponent(room)}/actions`
-        const res = await this.post("send actions", `${origin}${path}`, parsed.data)
+        const origin = this.roomInstanceMap.get(key) ?? this.client.baseUrl
+        const res = await this.client.sendActions(origin, room, parsed.data)
+        await this.assertOk("send actions", res)
 
         if (res.redirected) {
             const servedBy = new URL(res.url).origin
@@ -187,28 +156,17 @@ class ScribblePubBot {
     }
 
     /**
-     * Issues an authenticated POST, turning any non-2xx answer into a {@link ScribblePubApiError}.
+     * Checks if the response is ok, otherwise reads the error body and throws a ScribblePubApiError.
      */
-    private async post(operation: string, url: string, body: unknown): Promise<Response> {
-        const res = await fetch(url, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                Authorization: `Bearer ${this.config.token}`,
-            },
-            body: JSON.stringify(body),
-        })
-
+    private async assertOk(operation: string, res: Response): Promise<void> {
         if (!res.ok) {
             const errorBody = await this.readErrorBody(res)
             throw new ScribblePubApiError(
-                `failed to ${operation}: ${url} returned ${res.status} ${errorBody}`,
+                `failed to ${operation}: ${res.url} returned ${res.status} ${errorBody}`,
                 res.status,
                 errorBody,
             )
         }
-
-        return res
     }
 
     private async readErrorBody(res: Response): Promise<string> {
@@ -237,7 +195,7 @@ class ScribblePubBot {
     async handleHook(req: Request): Promise<Response> {
         const raw = await req.text()
 
-        const verified = await this.verifySignature(raw, req.headers)
+        const verified = await verifySignature(this.config.token, raw, req.headers)
         if (!verified) {
             return Response.json({ error: "invalid signature" }, { status: 401 })
         }
@@ -278,27 +236,6 @@ class ScribblePubBot {
         }
 
         return Response.json(parsedResponse.data)
-    }
-
-    private async verifySignature(raw: string, headers: Headers): Promise<boolean> {
-        const signature = headers.get("x-scribble-pub-signature")
-
-        // The hash signature always starts with sha256= to upgrade seamlessly if needed,
-        // similar to https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries#validating-webhook-deliveries.
-        if (!signature?.startsWith("sha256=")) return false
-
-        const hexSig = signature.substring(7)
-        const sigBytes = new Uint8Array(
-            (hexSig.match(/.{1,2}/g) ?? []).map((byte) => parseInt(byte, 16)),
-        )
-        const key = await crypto.subtle.importKey(
-            "raw",
-            new TextEncoder().encode(this.config.token),
-            { name: "HMAC", hash: "SHA-256" },
-            false,
-            ["verify"],
-        )
-        return await crypto.subtle.verify("HMAC", key, sigBytes, new TextEncoder().encode(raw))
     }
 }
 

@@ -1,0 +1,25 @@
+    {
+    "name": "@scribble-pub/api",
+    "version": "0.2.0",
+    "description": "The official Scribble.pub TypeScript API client and schema definitions.",
+    "license": "MIT",
+    "type": "module",
+    "main": "./dist/index.mjs",
+    "types": "./dist/index.d.mts",
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.mts",
+            "import": "./dist/index.mjs"
+        }
+    },
+    "files": [
+        "dist"
+    ],
+    "dependencies": {
+        "zod": "^4.4.3"
+    },
+    "scripts": {
+        "build": "tsdown src/index.mts",
+        "test": "vitest run"
+    }
+}

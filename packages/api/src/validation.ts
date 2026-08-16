@@ -5,7 +5,7 @@ import type {
     HookResponse,
     RegisterWebhookPayload,
     Trigger,
-} from "../schemas.js"
+} from "./schemas.js"
 
 const TriggerSchema: z.ZodType<Trigger> = z.object({
     trigger: z.literal("chat.mention"),

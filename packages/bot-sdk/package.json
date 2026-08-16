@@ -27,7 +27,7 @@
         "hono": "^4.13.1"
     },
     "dependencies": {
-        "zod": "^4.4.3"
+        "@scribble-pub/api": "*"
     },
     "scripts": {
         "dev": "tsx examples/local-server.ts",
