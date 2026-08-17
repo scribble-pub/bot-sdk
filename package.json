@@ -1,21 +1,21 @@
 {
-  "name": "sp-bot-monorepo",
-  "private": true,
-  "workspaces": [
-    "packages/*"
-  ],
-  "scripts": {
-    "build": "npm run build --workspaces",
-    "test": "vitest run",
-    "lint": "biome check .",
-    "format": "biome format --write ."
-  },
-  "devDependencies": {
-    "@biomejs/biome": "^2.5.7",
-    "@types/node": "^26.2.0",
-    "tsdown": "^0.22.14",
-    "tsx": "^4.23.11",
-    "typescript": "^7.0.2",
-    "vitest": "^4.1.10"
-  }
+    "name": "sp-bot-monorepo",
+    "private": true,
+    "workspaces": [
+        "packages/*"
+    ],
+    "scripts": {
+        "build": "npm run build --workspaces",
+        "test": "vitest run",
+        "lint": "biome check .",
+        "format": "biome format --write ."
+    },
+    "devDependencies": {
+        "@biomejs/biome": "^2.5.7",
+        "@types/node": "^26.2.0",
+        "tsdown": "^0.22.14",
+        "tsx": "^4.23.11",
+        "typescript": "^7.0.2",
+        "vitest": "^4.1.10"
+    }
 }

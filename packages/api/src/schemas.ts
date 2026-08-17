@@ -85,3 +85,254 @@ export type ErrorResponse = {
      */
     error: string
 }
+
+/**
+ * Any message for a specific room. Currently only supports some scratchpad events, but will also be used for chat.
+ *
+ * As the scribble.pub platform evolves, new fields will be added to these payloads.
+ * Your bot must ignore any unrecognized fields or message types.
+ * Do not use strict JSON validation that fails on unknown keys.
+ */
+export type RoomMessage = ScratchpadMessage
+
+/**
+ * Messages that define and modify the scratchpad state.
+ */
+export type ScratchpadMessage =
+    | ScratchpadSessionMetaMessage
+    | ScratchpadLayerMessage
+    | ScratchpadSetLayerOrderMessage
+    | ScratchpadObjectMessage
+    | ScratchpadLastEventIdMessage
+
+/**
+ * The scratchpad's global event counter value, closing a state snapshot.
+ *
+ * Since some events may have been skipped (such as, object removal),
+ * it may be larger than the event IDs received by other means.
+ * Keep it as the cursor to resume partial updates from.
+ */
+export type ScratchpadLastEventIdMessage = {
+    type: "sp.lastEventId"
+
+    lastEventId: number
+}
+
+/**
+ * Global metadata about the current drawing session in the room.
+ *
+ * Receiving this event begins a new drawing session, usually due to a room clear.
+ * Bots should reset their local state (layers, frames, objects, last event ID) when receiving this to a complete empty state.
+ * The default layers will be provided additionally with the standard {@link ScratchpadLayerMessage} message.
+ */
+export type ScratchpadSessionMetaMessage = {
+    type: "sp.sessionMeta"
+
+    /**
+     * An identifier for the current drawing.
+     *
+     * In theory, an old state can be restored in the same or even another room,
+     * and it will have the same identifier as when the original drawing started,
+     * but this is an exceptional behavior as for now.
+     */
+    currentSession: number
+
+    /**
+     * The ID of the event that created this metadata.
+     *
+     * Shares the counter over every `eventId`/`lastEventId` you receive.
+     */
+    eventId: number
+
+    /**
+     * Session's sequential ID for a room which has its gallery enabled.
+     *
+     * This is used for permalinks like https://scribble.pub/main/167 where 167 is the seqId.
+     */
+    seqId: number
+
+    /**
+     * The width of the room canvas. Every object coordinate is expressed in this space.
+     */
+    canvasWidth: number
+
+    /**
+     * The height of the room canvas. Every object coordinate is expressed in this space.
+     */
+    canvasHeight: number
+}
+
+/**
+ * A message that creates, updates, or deletes a scratchpad layer.
+ *
+ * The bot is expected to maintain a local state of layers. When this message arrives,
+ * it should upsert the layer by its `layerId`, and also upsert/delete its frames accordingly.
+ * If the `frames` array is empty, the layer was deleted.
+ *
+ * **Layers vs. Frames**:
+ * - **Layers** define the top-level rendering z-index.
+ * - **Frames** are a part of layers and contain the actual drawing objects.
+ * At any single point in time, only one frame can be rendered per layer.
+ * Currently, the server only provides 1 frame per layer (the static preview).
+ *
+ * The rendering order of the objects on a layer/frame is by `objectId`, ascending.
+ *
+ * Read more about client-facing layers and animation frames at https://scribble.pub/docs/animations.
+ */
+export type ScratchpadLayerMessage = {
+    type: "sp.layer"
+
+    /**
+     * A unique session-scoped identifier for the layer.
+     *
+     * Note: Layers, frames, and objects each have their own independent ID counters.
+     */
+    layerId: number
+
+    /**
+     * The IDs of the frames in this layer.
+     * Frame IDs are room-global, and a specific frame ID belongs exclusively to one layer.
+     *
+     * If a new frame ID arrives, it should be created in the state.
+     * If a layer arrives with an empty `frames` array, it means the layer was deleted.
+     *
+     * Currently, this only returns a single frame ID for the static preview.
+     * For most layers, this is the first frame. For layers in "Roll" mode
+     * (https://scribble.pub/docs/animations#animation-modes), the currently rolled frame ID is returned instead.
+     */
+    frames: number[]
+
+    /**
+     * The last ID of the event that created or modified this layer.
+     * This is a shared counter across all scratchpad events in the room, within the session.
+     */
+    lastEventId: number
+}
+
+export type ScratchpadSetLayerOrderMessage = {
+    type: "sp.layerOrder"
+
+    /**
+     * The order of layer IDs in the room.
+     * Layers are ordered from bottom to top, with the first layer being the bottommost.
+     * The bottommost layer is drawn on top of a white background.
+     */
+    order: number[]
+
+    /**
+     * The ID of the event that set this layer order.
+     *
+     * It is -1 in a state snapshot, where the order is defined only once when all layers are received.
+     */
+    lastEventId: number
+}
+
+/**
+ * Represents a drawn line on a frame.
+ *
+ * These messages are delivered in ascending `objectId` order,
+ * representing the order in which they were drawn.
+ * Since this matches the rendering order within a frame,
+ * you can safely append incoming objects to your local state without sorting them,
+ * and you can immediately draw them on top of the frame canvas as they arrive.
+ *
+ * Expect missed object IDs. Erased objects keep their IDs but are never delivered.
+ *
+ * A fallback note: if the frame is not found, don't add the object.
+ * This is not expected to happen, but it's better to handle it gracefully.
+ */
+export type ScratchpadObjectMessage = {
+    type: "sp.object"
+
+    /**
+     * A unique session-scoped identifier for the object.
+     *
+     * Note: Layers, frames, and objects each have their own independent ID counters.
+     */
+    objectId: number
+
+    /**
+     * The ID of the frame that this object belongs to.
+     */
+    frameId: number
+
+    /**
+     * The ID of the event that last modified this object.
+     */
+    eventId: number
+} & ScratchpadObjectPayload
+
+export type ScratchpadObjectPayloadLineFloats = {
+    /**
+     * Simple lines.
+     *
+     * The server mostly uses viewport pos/delta-based lines with custom point serialization,
+     * but currently, they will be converted for you to this simplified format by the server.
+     *
+     * Before 1.0, expect losing compatibility here.
+     * It is planned to stop converting the lines to simplified format for precision and wire size efficiency.
+     * The lines that are received as "line.floats" now will be received under a different type.
+     */
+    objectType: "line.floats"
+
+    /**
+     * The color of the line packed as `R << 24 | G << 16 | B << 8 | A`,
+     * which is the same order as the CSS `#rrggbbaa` notation.
+     *
+     * Note that alpha is the *lowest* byte, not the highest: 0xff0000ff is opaque red.
+     *
+     * Use {@link rgbaToHex} for a ready-to-draw CSS string, or {@link rgbaToComponents} for the channels.
+     */
+    rgba: number
+
+    /**
+     * The width of the line.
+     *
+     * If 0, the polygon should be drawn as a filled polygon,
+     * implicitly closed from the last point back to the first.
+     *
+     * Otherwise, the line should be drawn as a stroked line with the given width, round caps, and round joins.
+     * (See https://developer.mozilla.org/en-US/docs/Web/API/CanvasRenderingContext2D/lineCap)
+     */
+    lineWidth: number
+
+    /**
+     * A flat array of coordinates `[x1, y1, x2, y2, ...]`.
+     *
+     * If there are fewer than 4 coordinates, the line should be drawn as a filled circle of radius `lineWidth / 2` around `[x1, y1]`.
+     * It's worth explicitly handling this case because many APIs/libraries omit calls to moveTo/lineTo on the same point even with `lineCap` set to `"round"`.
+     */
+    points: number[]
+}
+
+export type ScratchpadObjectPayload = ScratchpadObjectPayloadLineFloats
+
+/**
+ * The body returned by a room state fetch.
+ */
+export type RoomStateResponse = {
+    /**
+     * The messages rebuilding the room state, in the order they must be applied.
+     *
+     * Each app (scratchpad or chat) closes its own section with its event counter,
+     * such as {@link ScratchpadLastEventIdMessage}.
+     */
+    messages: RoomMessage[]
+}
+
+/**
+ * Options for fetching room messages, left for future polling/delta parameters.
+ */
+export type GetRoomStateMessagesOptions = Record<string, never>
+
+/**
+ * Options for fetching a room's raster preview image.
+ */
+export interface GetRoomPreviewOptions {
+    /**
+     * A standard HTTP Date string (e.g., "Mon, 17 Aug 2026 13:43:50 GMT").
+     * If provided, the server will return a 304 Not Modified if the image hasn't changed,
+     * saving bandwidth.
+     */
+    ifModifiedSince?: string
+}

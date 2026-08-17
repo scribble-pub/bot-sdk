@@ -2,7 +2,7 @@
 
 The official TypeScript SDK for building bots on [scribble.pub](https://scribble.pub).
 
-This package also serves as the official reference description for the Bot API. The TypeScript definitions found in [`src/schemas.ts`](./src/schemas.ts) act as the single source of truth for all payloads and actions.
+This package also serves as the official reference description for the canvas and chat state management. See [`src/state.ts`](./src/state.ts) to learn how to correctly reduce incoming room events into a local state.
 
 Built on standard Web APIs (`Request` / `Response` / `crypto.subtle`), it runs natively in **Node.js, Cloudflare Workers, Deno, Bun, and Next.js Edge**.
 
@@ -126,6 +126,8 @@ Rooms are served by regional instances. The platform and the SDK provide a fully
 Each redirect is remembered, and every hook caches the instance table from `trigger.directUrl`,
 so repeat calls to a room go straight to the right instance.
 
+Only mutating actions need this. Reads — such as `getRoomStateMessages` and `getRoomPreviewImage` — are answered by whichever replica takes the request, so they skip the instance table on purpose rather than pinning themselves to one region.
+
 Internally, encrypted credentials are substituted for the redirect link, so the authorization token is never lost,
 and no complex redirecting logic is required by the SDK.
 
@@ -134,6 +136,69 @@ and no complex redirecting logic is required by the SDK.
 The platform performs no retries. A hook whose response misses the 10-second deadline is discarded.
 
 Also, it currently doesn't support idempotency keys or "random IDs". Duplicates are an acceptable compromise at this point.
+
+## State Management
+
+When you fetch the room state via `bot.getRoomStateMessages` (or receive it via a websocket in the future), you get a `RoomStateResponse` wrapping the `RoomMessage` events that (re)build the room.
+
+To easily query this event stream, the SDK provides a `RoomState` helper class that reduces the stream into a local state tree:
+
+```typescript
+import { RoomState } from "@scribble-pub/bot-sdk"
+
+const state = RoomState.fromMessages(response.messages)
+
+// Query the state tree
+console.log(`There are ${state.scratchpad.layers.size} layers in the room!`)
+```
+
+`RoomState` holds one substate per room subsystem and routes each message to the one that owns it. Today that is only `state.scratchpad`, a `ScratchpadState` covering the drawing surface.
+
+`bot.getRoomState` does both steps in one call:
+
+```typescript
+const state = await bot.getRoomState("main")
+```
+
+The tree is read-only from the outside: `layers`, `frames`, `objects`, and `layerOrder` are exposed as `ReadonlyMap`s and readonly arrays.
+
+### State entities vs. messages
+
+The state tree is built from `ScratchpadLayer`, `ScratchpadFrame`, and `ScratchpadObject`. Their wire counterparts carry the same names with a `Message` suffix — `ScratchpadLayerMessage` and friends — so the two are never confused for each other. The wire format is free to grow without dragging the state shape along with it, and the state is free to carry things the wire doesn't send.
+
+The one structural rule worth knowing: **layers own frames.** A frame exists because a layer declared it in `frames`, and disappears — along with its objects — as soon as no layer declares it.
+
+### High-Performance Mutable State
+**The state tree is intentionally mutable.** 
+
+Unlike React/Redux where state is strictly immutable, a `scribble.pub` room can contain tens of thousands of drawing objects. Re-allocating the state tree for every single drawing event would cause massive Garbage Collection overhead and destroy Node.js performance. 
+
+Instead, this SDK borrows from Game Engine architectures: `state.applyMessage` modifies the internal `Map`s directly. This guarantees virtually zero GC thrashing and allows a single bot to track state for hundreds of high-traffic rooms simultaneously.
+
+### Concepts: Layers vs. Frames
+When building your bot's rendering or state logic, you must understand the structural separation between Layers and Frames:
+
+* **Layers**: Behave like traditional Photoshop layers. They define the top-level rendering z-index of the canvas.
+* **Frames**: Are a part of layers and contain the actual drawing objects (`ScratchpadObject`). They are primarily used for animations (e.g., flipbook-style drawing). 
+
+**Crucial Rule:** At any single point in time, **only one frame can be rendered per layer.** This is why you'll often see layer z-index and frame z-index used interchangeably in casual discussion. Currently, the bot server provides exactly 1 frame per layer (representing the static preview), but your bot must respect this structural separation to remain compatible with future API releases.
+
+For a user-facing explanation of these concepts, see [scribble.pub/docs/animations](https://scribble.pub/docs/animations).
+
+### Concepts: the canvas
+
+Every coordinate you receive lives in a `canvasWidth` × `canvasHeight` space (provided in the `sp.sessionMeta` event) — currently only 1000 × 700 but may change or become dynamic in the future — with the origin in the top-left. The raster preview from `getRoomPreviewImage` is that same canvas at a 0.6 scale (so typically 600 × 420).
+
+Colors are packed into a single integer as `R << 24 | G << 16 | B << 8 | A`, reflecting the CSS RGBA HEX notation. The alpha is the **lowest** byte, which is the opposite of the ARGB layout most people assume: `0xff0000ff` is opaque red.
+
+That is byte for byte the CSS `#rrggbbaa` notation, so `rgbaToHex` just formats the number as HEX prefixed by "#". Use `rgbaToComponents` when you need the components instead.
+
+```typescript
+import { rgbaToHex, rgbaToComponents } from "@scribble-pub/bot-sdk"
+
+ctx.strokeStyle = rgbaToHex(object.color)   // "#dbffb9ff"
+const { r, g, b, a } = rgbaToComponents(object.color)
+```
 
 ## Security (HMAC-SHA256 Signatures)
 
@@ -211,3 +276,10 @@ function onMention(req: HookRequest): HookResult {
 
 bot.on("hook", onMention)
 ```
+## Forward Compatibility (Important)
+As the platform evolves, new fields and message types will be added to the JSON payloads. 
+**Your bot must ignore any unrecognized fields or message types.** 
+Do not use strict JSON validation (e.g., `zod.strict()`) that fails on unknown keys, or your bot will crash when new features are released.
+
+> [!WARNING]
+> According to current plans, before 1.0, the `line.floats` object type will remain only for simple points and lines provided by bots. Complex user-drawn lines will be sent in a more efficient, high-precision format, similar to the one that is used for UI-server communication.

@@ -1,4 +1,8 @@
-export async function verifySignature(token: string, raw: string, headers: Headers): Promise<boolean> {
+export async function verifySignature(
+    token: string,
+    raw: string,
+    headers: Headers,
+): Promise<boolean> {
     const signature = headers.get("x-scribble-pub-signature")
 
     // The hash signature always starts with sha256= to upgrade seamlessly if needed,

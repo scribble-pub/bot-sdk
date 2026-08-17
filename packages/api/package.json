@@ -1,6 +1,6 @@
-    {
+{
     "name": "@scribble-pub/api",
-    "version": "0.2.0",
+    "version": "0.3.0-SNAPSHOT",
     "description": "The official Scribble.pub TypeScript API client and schema definitions.",
     "license": "MIT",
     "type": "module",

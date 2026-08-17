@@ -2,7 +2,9 @@
 
 The raw typescript API wrapper and schema definitions for the `scribble.pub` platform.
 
-This package contains low-level HTTP clients, cryptographic signature verification, and Zod parsers for the core wire types. 
+This package contains low-level HTTP clients, cryptographic signature verification, and Zod parsers for the core wire types.
+
+This package also serves as the official reference description for the Bot API. The TypeScript definitions found in [`src/schemas.ts`](./src/schemas.ts) act as the single source of truth for all payloads and actions.
 
 > [!NOTE]
 > If you are building a bot, we highly recommend using [`@scribble-pub/bot-sdk`](../bot-sdk) instead. It wraps this package and provides a much better Developer Experience.

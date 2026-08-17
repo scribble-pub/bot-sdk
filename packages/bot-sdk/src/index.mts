@@ -3,11 +3,21 @@ import {
     parseHookResponse,
     parseRegisterWebhookPayload,
     verifySignature,
-    ScribblePubClient
+    ScribblePubClient,
 } from "@scribble-pub/api"
-import type { Action, ErrorResponse, HookRequest } from "@scribble-pub/api"
+import type {
+    Action,
+    ErrorResponse,
+    HookRequest,
+    GetRoomPreviewOptions,
+    RoomStateResponse,
+} from "@scribble-pub/api"
 
 import { ScribblePubApiError, ScribblePubValidationError } from "./errors.js"
+import type { GetRoomStateMessagesOptions } from "@scribble-pub/api"
+import { RoomState } from "./state.js"
+
+export * from "./state.js"
 
 export type { ValidationError } from "@scribble-pub/api"
 
@@ -18,10 +28,17 @@ export type {
     HookRequest,
     HookResponse,
     RegisterWebhookPayload,
+    GetRoomStateMessagesOptions,
+    GetRoomPreviewOptions,
+    RoomMessage,
+    RoomStateResponse,
     Trigger,
 } from "@scribble-pub/api"
 
 export { ScribblePubApiError, ScribblePubValidationError }
+
+export { rgbaToHex, rgbaToComponents } from "@scribble-pub/api"
+export type { RgbaComponents } from "@scribble-pub/api"
 
 const DEFAULT_BASE_URL = "https://scribble.pub"
 
@@ -78,7 +95,7 @@ class ScribblePubBot {
     constructor(config: BotConfig) {
         this.config = config
         const baseUrl = (config.baseUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, "")
-        
+
         this.client = new ScribblePubClient(config.token, baseUrl)
 
         if (baseUrl === DEFAULT_BASE_URL) {
@@ -127,12 +144,7 @@ class ScribblePubBot {
      * @throws {ScribblePubApiError} if the platform rejects the request.
      */
     async sendActions(room: string, actions: Action[]): Promise<void> {
-        const key = room.trim().toLowerCase()
-        if (!key) {
-            throw new ScribblePubValidationError("invalid room reference: room is required", [
-                { path: "room", message: "room is required" },
-            ])
-        }
+        const key = this.assertRoom(room)
 
         const parsed = parseHookResponse(actions)
         if (!parsed.success) {
@@ -144,8 +156,9 @@ class ScribblePubBot {
         }
 
         const origin = this.roomInstanceMap.get(key) ?? this.client.baseUrl
-        const res = await this.client.sendActions(origin, room, parsed.data)
-        await this.assertOk("send actions", res)
+        const res = await this.send("send actions", () =>
+            this.client.sendActions(origin, room, parsed.data),
+        )
 
         if (res.redirected) {
             const servedBy = new URL(res.url).origin
@@ -153,10 +166,111 @@ class ScribblePubBot {
                 this.roomInstanceMap.set(key, servedBy)
             }
         }
+        await this.assertOk("send actions", res)
     }
 
     /**
-     * Checks if the response is ok, otherwise reads the error body and throws a ScribblePubApiError.
+     * Gets the state of a room as a list of messages that can be used to restore the state.
+     *
+     * Currently, this only returns the currently visible static snapshot of the room, omitting full animation timelines.
+     * For most layers, this means only the first frame is returned.
+     * For layers in "Roll" mode (check it in https://scribble.pub/docs/animations#animation-modes),
+     * the currently rolled frame is returned instead.
+     * Future versions of the API are going to provide the full state.
+     *
+     * @param room The ID of the room.
+     * @param options Optional parameters for fetching messages (e.g., { sinceEventId: 1234 }).
+     *
+     * @throws {ScribblePubValidationError} if `room` fails validation.
+     * @throws {ScribblePubApiError} if the platform rejects the request.
+     */
+    async getRoomStateMessages(
+        room: string,
+        options?: GetRoomStateMessagesOptions,
+    ): Promise<RoomStateResponse> {
+        this.assertRoom(room)
+        // Reads are served by whichever replica answers.
+        const res = await this.send("get room messages", () =>
+            this.client.getRoomState(this.client.baseUrl, room, options),
+        )
+        await this.assertOk("get room messages", res)
+
+        return await res.json()
+    }
+
+    /**
+     * Fetches the room state and reduces it into a {@link RoomState}.
+     *
+     * @param room The ID of the room.
+     *
+     * @throws {ScribblePubValidationError} if `room` fails validation.
+     * @throws {ScribblePubApiError} if the platform rejects the request.
+     */
+    async getRoomState(room: string): Promise<RoomState> {
+        const response = await this.getRoomStateMessages(room)
+        return RoomState.fromMessages(response.messages)
+    }
+
+    /**
+     * Fetches a low-res (600x420) raster preview of the room.
+     *
+     * @param room The ID of the room.
+     * @param options Optional parameters (e.g., { ifModifiedSince: "Mon, 17 Aug 2026 13:43:50 GMT" }).
+     * @returns An ArrayBuffer containing the PNG image, or null if it was not modified (304).
+     *
+     * @throws {ScribblePubValidationError} if `room` fails validation.
+     * @throws {ScribblePubApiError} if the platform rejects the request.
+     */
+    async getRoomPreviewImage(
+        room: string,
+        options?: GetRoomPreviewOptions,
+    ): Promise<ArrayBuffer | null> {
+        this.assertRoom(room)
+
+        // Reads are served by whichever replica answers.
+        const res = await this.send("get room preview", () =>
+            this.client.getRoomPreview(this.client.baseUrl, room, options),
+        )
+
+        if (res.status === 304) {
+            return null
+        }
+        await this.assertOk("get room preview", res)
+
+        return await res.arrayBuffer()
+    }
+
+    /**
+     * Checks a room reference and normalizes it into the key
+     * used by {@link ScribblePubBot.roomInstanceMap}.
+     *
+     * @throws {ScribblePubValidationError} if the reference is empty.
+     */
+    private assertRoom(room: string): string {
+        const key = room.trim().toLowerCase()
+        if (!key) {
+            throw new ScribblePubValidationError("invalid room reference: room is required", [
+                { path: "room", message: "room is required" },
+            ])
+        }
+        return key
+    }
+
+    /**
+     * Runs a platform call, re-wrapping transport failures as ScribblePubApiError.
+     * The response status is left to the caller because a 304 is a valid answer for some endpoints.
+     */
+    private async send(operation: string, call: () => Promise<Response>): Promise<Response> {
+        try {
+            return await call()
+        } catch (error) {
+            const message = error instanceof Error ? error.message : "unknown error"
+            throw new ScribblePubApiError(`failed to ${operation}: ${message}`, 500, message)
+        }
+    }
+
+    /**
+     * Checks if the response is ok, otherwise reads the error body, and throws a ScribblePubApiError.
      */
     private async assertOk(operation: string, res: Response): Promise<void> {
         if (!res.ok) {
