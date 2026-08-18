@@ -69,14 +69,17 @@ export type BotConfig = {
 }
 
 /**
- * You can return an immediate list of actions as a hook response.
- * If some async work is required, send a separate request with the actions by using {@link ScribblePubBot.sendActions},
- * because the platform has a 10-second timeout for hook responses.
+ * The list of actions to answer a hook with, or nothing to answer with an empty list.
+ *
+ * A handler may return this directly or as a promise, so short awaits — reading the room state,
+ * a quick lookup of your own — can happen inline. The platform discards a response that misses its
+ * 10-second deadline, so anything slower should acknowledge the hook and deliver later
+ * through {@link ScribblePubBot.sendActions}.
  */
 export type HookResult = Action[] | undefined
 
 type EventMap = {
-    hook: (request: HookRequest) => HookResult
+    hook: (request: HookRequest) => HookResult | Promise<HookResult>
 }
 
 class ScribblePubBot {
@@ -366,7 +369,7 @@ class ScribblePubBot {
             return Response.json({ error: "no handler registered" }, { status: 501 })
         }
 
-        const actions = handler(parsedRequest.data) ?? []
+        const actions = (await handler(parsedRequest.data)) ?? []
 
         const parsedResponse = parseHookResponse(actions)
         if (!parsedResponse.success) {

@@ -122,6 +122,40 @@ describe("scribble.pub bot with Hono", () => {
         expect(await res.json()).toEqual({ actions: [] } as HookResponse)
     })
 
+    it("awaits an async handler before answering", async () => {
+        const bot = new ScribblePubBot({ token: TOKEN })
+
+        bot.on("hook", async (req) => {
+            await new Promise((resolve) => setTimeout(resolve, 5))
+            return [{ type: "addMessage", text: `Hi, ${req.trigger.username}!` }]
+        })
+
+        const payload = JSON.stringify({
+            trigger: {
+                trigger: "chat.mention",
+                text: "@TestBot hello",
+                room: "main",
+                timestamp: 1779999999999,
+                username: "TheBestArtist",
+                directUrl: "https://eu.scribble.pub",
+            },
+        } as HookRequest)
+
+        const res = await appWithBot(bot).request("/webhook", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "X-Scribble-Pub-Signature": await sign(TOKEN, payload),
+            },
+            body: payload,
+        })
+
+        expect(res.status).toBe(200)
+        expect(await res.json()).toEqual({
+            actions: [{ type: "addMessage", text: "Hi, TheBestArtist!" }],
+        } as HookResponse)
+    })
+
     it("rejects invalid signature", async () => {
         const bot = new ScribblePubBot({ token: TOKEN })
 
@@ -497,7 +531,7 @@ describe("sendActions", () => {
         )
     })
 
-    it("keeps the raw body when JSON carries no usable error field", async () => {
+    it("keeps the raw body when JSON contains no usable error field", async () => {
         stubFetch(new Response(`{"code":17}`, { status: 500 }))
         const bot = new ScribblePubBot({ token: TOKEN })
 
@@ -506,7 +540,7 @@ describe("sendActions", () => {
         expect(error.body).toBe(`{"code":17}`)
     })
 
-    it("caches the origin without the credential carried in the redirect URL", async () => {
+    it("caches only the redirect origin, dropping its path and one-shot credential", async () => {
         const fetchMock = stubFetch(
             redirectedTo(`${AP}/api/v0/room/quiet/actions?t=ttl-token`),
             Response.json({ ok: true }),

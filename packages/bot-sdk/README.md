@@ -6,13 +6,12 @@ This package also serves as the official reference description for the canvas an
 
 Built on standard Web APIs (`Request` / `Response` / `crypto.subtle`), it runs natively in **Node.js, Cloudflare Workers, Deno, Bun, and Next.js Edge**.
 
-## Quick Start
+## Quick Start: Hooks
 
 > [!NOTE]
 > Bot development is currently private. To allocate a bot and receive your secret token, please contact [support@scribble.pub](mailto:support@scribble.pub).
 
-Given you already [provided the hook URL](#registering-your-webhook-url) to scribble.pub, initialize your bot with your secret token,
-and listen for the webhook events, responding with an array of actions.
+After [registering your webhook URL](#registering-your-webhook-url), initialize the bot with your secret token and listen for webhook events:
 
 ```typescript
 import ScribblePubBot from "@scribble-pub/bot-sdk"
@@ -34,9 +33,26 @@ bot.on("hook", (req) => {
 })
 ```
 
-## Integrating with your HTTP Server
+**The hook calls have a 10-second timeout**. In complex cases requiring additional work, you should send the result as a separate request instead: see [Sending actions outside a hook](#sending-actions-outside-a-hook).
 
-Because `ScribblePubBot` is built on standard Web Fetch APIs, hooking it up to your server is a one-liner. You simply pass the raw HTTP `Request` object into `bot.handleHook(req)`, and it returns an HTTP `Response` object.
+Currently, no retries are attempted if the hook fails. Retries and idempotency are planned to be added later.
+
+### Security (HMAC-SHA256 Signatures)
+
+Webhooks are public endpoints, which means anyone can send POST requests to your server.
+
+To guarantee that incoming requests genuinely came from scribble.pub and haven't been tampered with in transit, the platform signs all payloads with **HMAC-SHA256**.
+
+You do not need to write any cryptographic validation code yourself. When you call `bot.handleHook(req)`, the SDK automatically:
+1. Extracts the `X-Scribble-Pub-Signature` header (which uses the `sha256=` prefix for cryptographic agility).
+2. Uses the native `crypto.subtle.verify` API to recalculate the HMAC hash using your secret token.
+3. Performs a constant-time cryptographic comparison to prevent timing attacks.
+
+If the signature is invalid or missing, `bot.handleHook` immediately returns a `401 Unauthorized` HTTP Response with a JSON body: `{ "error": "invalid signature" }`.
+
+## Integrating with your HTTP server
+
+`ScribblePubBot` is built on standard Web Fetch APIs. To serve the webhook, you pass the raw HTTP `Request` object into `bot.handleHook(req)`, and it returns an HTTP `Response` object.
 
 ### Example with Hono
 
@@ -50,13 +66,13 @@ See [`examples/local-server.ts`](./examples/local-server.ts) for a complete, run
 
 ## Registering your webhook URL
 
-Once your server is reachable, tell the platform where to send hooks. `registerWebhook` POSTs to `/api/v0/bot/webhook/register`, authenticating with your bot token, and replaces whatever URL was registered before.
+To tell the platform where to send hooks, use `registerWebhook`. This replaces any previously registered URL.
 
 ```typescript
 await bot.registerWebhook("https://example.com/hook")
 ```
 
-If the platform rejects the registration, the SDK throws a `ScribblePubApiError` carrying the HTTP `status` and the error message in `body`:
+If the platform rejects the registration, the SDK throws a `ScribblePubApiError`:
 
 ```typescript
 import ScribblePubBot, { ScribblePubApiError } from "@scribble-pub/bot-sdk"
@@ -78,20 +94,17 @@ Calls to the platform go to `https://scribble.pub` by default. Use `baseUrl` to 
 const bot = new ScribblePubBot({ token: process.env.BOT_TOKEN, baseUrl: "http://localhost:8080" })
 ```
 
-A custom `baseUrl` also switches off the built-in room-to-instance table, since those entries name production instances — a local instance starts with an empty table and learns from redirects.
+A custom `baseUrl` also switches off the built-in room-to-instance table, which only makes sense in production.
 
 ## Sending actions outside a hook
 
-Hook handlers are **synchronous**: they return an `Action[]`, or nothing at all.
-
-Anything that can't be answered immediately goes through `sendActions`, which makes a separate request to the room directly.
-The body is identical to a hook response, so the same `Action[]` works in both places.
+You can send actions proactively:
 
 ```typescript
 await bot.sendActions("main", [{ type: "addMessage", text: "Good morning!" }])
 ```
 
-That covers scheduled posts, long-running work, and anything else that happens outside a trigger. A handler may also acknowledge a hook with nothing and let separate work deliver later:
+If your bot requires longer work such as media processing or LLM querying, you must give the hook response as soon as possible. When the work is done, send the result by using `sendActions`, which makes a separate request to the room directly.
 
 ```typescript
 bot.on("hook", (req) => {
@@ -101,7 +114,7 @@ bot.on("hook", (req) => {
 ```
 
 > [!NOTE]
-> On edge runtimes (Cloudflare Workers, Vercel Edge), work started in a handler is killed once the response is returned. Hand the promise to `ctx.waitUntil(...)` so a later `sendActions` survives.
+> On edge runtimes (Cloudflare Workers, Vercel Edge), work started in a handler is killed once the response is returned. Hand the promise to `ctx.waitUntil(...)` so a later `sendActions` survives. Work you `await` inside the handler is unaffected, since the response has not been returned yet.
 
 Failures throw `ScribblePubApiError`, most usefully `403` when your bot can't perform one of the given actions in that room
 and `404` when the room doesn't exist or is offline:
@@ -123,32 +136,24 @@ try {
 Rooms are served by regional instances. The platform and the SDK provide a fully seamless way to handle it:
 `sendActions` reaches the instance itself, following the platform's redirects when needed.
 
-Each redirect is remembered, and every hook caches the instance table from `trigger.directUrl`,
-so repeat calls to a room go straight to the right instance.
+Each redirect is cached, and every hook caches the instance address from `trigger.directUrl`, so repeat calls to a room go straight to the right instance.
 
-Only mutating actions need this. Reads — such as `getRoomStateMessages` and `getRoomPreviewImage` — are answered by whichever replica takes the request, so they skip the instance table on purpose rather than pinning themselves to one region.
+Only mutating actions need this. Reads (such as `getRoomStateMessages`) are served by all instances.
 
-Internally, encrypted credentials are substituted for the redirect link, so the authorization token is never lost,
-and no complex redirecting logic is required by the SDK.
-
-### Duplicate deliveries
-
-The platform performs no retries. A hook whose response misses the 10-second deadline is discarded.
-
-Also, it currently doesn't support idempotency keys or "random IDs". Duplicates are an acceptable compromise at this point.
+Internally, encrypted credentials are substituted for the redirect link, so the authorization token is never lost, and no complex redirecting logic is required by the SDK.
 
 ## State Management
 
 When you fetch the room state via `bot.getRoomStateMessages` (or receive it via a websocket in the future), you get a `RoomStateResponse` wrapping the `RoomMessage` events that (re)build the room.
 
-To easily query this event stream, the SDK provides a `RoomState` helper class that reduces the stream into a local state tree:
+The SDK provides a `RoomState` helper class that reduces the message stream into a local state:
 
 ```typescript
 import { RoomState } from "@scribble-pub/bot-sdk"
 
 const state = RoomState.fromMessages(response.messages)
 
-// Query the state tree
+// Query the state
 console.log(`There are ${state.scratchpad.layers.size} layers in the room!`)
 ```
 
@@ -160,36 +165,36 @@ console.log(`There are ${state.scratchpad.layers.size} layers in the room!`)
 const state = await bot.getRoomState("main")
 ```
 
-The tree is read-only from the outside: `layers`, `frames`, `objects`, and `layerOrder` are exposed as `ReadonlyMap`s and readonly arrays.
+The state is read-only from the outside: local fields are exposed as `ReadonlyMap`s and readonly arrays.
 
 ### State entities vs. messages
 
-The state tree is built from `ScratchpadLayer`, `ScratchpadFrame`, and `ScratchpadObject`. Their wire counterparts carry the same names with a `Message` suffix — `ScratchpadLayerMessage` and friends — so the two are never confused for each other. The wire format is free to grow without dragging the state shape along with it, and the state is free to carry things the wire doesn't send.
+The state is built from `ScratchpadLayer`, `ScratchpadFrame`, and `ScratchpadObject`. Their transfer counterparts have the same names with a `Message` suffix, like `ScratchpadLayerMessage`.
 
-The one structural rule worth knowing: **layers own frames.** A frame exists because a layer declared it in `frames`, and disappears — along with its objects — as soon as no layer declares it.
+### Mutable State
+**The state is mutable.** 
 
-### High-Performance Mutable State
-**The state tree is intentionally mutable.** 
+A `scribble.pub` room can contain tens of thousands of drawing objects. Cloning the state for every single drawing event would cause massive Garbage Collection overhead and destroy Node.js performance. 
 
-Unlike React/Redux where state is strictly immutable, a `scribble.pub` room can contain tens of thousands of drawing objects. Re-allocating the state tree for every single drawing event would cause massive Garbage Collection overhead and destroy Node.js performance. 
-
-Instead, this SDK borrows from Game Engine architectures: `state.applyMessage` modifies the internal `Map`s directly. This guarantees virtually zero GC thrashing and allows a single bot to track state for hundreds of high-traffic rooms simultaneously.
+To keep working efficiently, instead of taking the immutable React/Redux approach, this SDK mutates the state: `state.applyMessage` modifies the internal objects directly.
 
 ### Concepts: Layers vs. Frames
-When building your bot's rendering or state logic, you must understand the structural separation between Layers and Frames:
+When building your bot's state and rendering logic, you must understand the difference between Layers and Frames:
 
 * **Layers**: Behave like traditional Photoshop layers. They define the top-level rendering z-index of the canvas.
-* **Frames**: Are a part of layers and contain the actual drawing objects (`ScratchpadObject`). They are primarily used for animations (e.g., flipbook-style drawing). 
+* **Frames**: A part of layers and contain the actual objects to draw (`ScratchpadObject`). They were introduced for animations (e.g., flipbook-style drawing), but even without animations, a single frame will exist for every layer. 
 
-**Crucial Rule:** At any single point in time, **only one frame can be rendered per layer.** This is why you'll often see layer z-index and frame z-index used interchangeably in casual discussion. Currently, the bot server provides exactly 1 frame per layer (representing the static preview), but your bot must respect this structural separation to remain compatible with future API releases.
+At any single point in time, only one frame can be rendered per layer. This is why layer z-index and frame z-index mean the same.
 
-For a user-facing explanation of these concepts, see [scribble.pub/docs/animations](https://scribble.pub/docs/animations).
+To simplify rollout, the bot server currently provides only one frame per layer, but your bot must be structurally ready to accept more, i.e., keep layer frames as a map or an array, not as a single object.
+
+For a user-facing explanation of layers and animation frames, see [scribble.pub/docs/animations](https://scribble.pub/docs/animations).
 
 ### Concepts: the canvas
 
-Every coordinate you receive lives in a `canvasWidth` × `canvasHeight` space (provided in the `sp.sessionMeta` event) — currently only 1000 × 700 but may change or become dynamic in the future — with the origin in the top-left. The raster preview from `getRoomPreviewImage` is that same canvas at a 0.6 scale (so typically 600 × 420).
+The coordinates you receive are in the `canvasWidth` × `canvasHeight` space (provided in the `sp.sessionMeta` event), which is currently 1000 × 700 but may change or become dynamic in the future. (0,0) represents top-left. The raster preview from `getRoomPreviewImage` is the same canvas at a 0.6px scale (so typically 600 × 420 px), the same used in the big room list from UI.
 
-Colors are packed into a single integer as `R << 24 | G << 16 | B << 8 | A`, reflecting the CSS RGBA HEX notation. The alpha is the **lowest** byte, which is the opposite of the ARGB layout most people assume: `0xff0000ff` is opaque red.
+Colors are transfered as a single RGBA integer, 1 byte each component: `R << 24 | G << 16 | B << 8 | A`, reflecting the CSS RGBA HEX notation. This is not ARGB that is also commonly used: `0xff0000ff` is opaque red.
 
 That is byte for byte the CSS `#rrggbbaa` notation, so `rgbaToHex` just formats the number as HEX prefixed by "#". Use `rgbaToComponents` when you need the components instead.
 
@@ -214,84 +219,29 @@ It is currently 350 × 60, but read the dimensions from the PNG rather than hard
 
 The logo is not room-scoped, so this call takes no room and needs no room permissions.
 
-The response carries an `ETag` that changes only when someone draws on the logo. Passing it back as `ifNoneMatch` makes the platform answer `304` and `getLogoImage` return `null`, meaning the copy you already have is still current.
-
-## Security (HMAC-SHA256 Signatures)
-
-Webhooks are public endpoints, which means anyone can send POST requests to your server. 
-
-To guarantee that incoming requests genuinely came from scribble.pub and haven't been tampered with in transit, the platform signs all payloads with **HMAC-SHA256**.
-
-You do not need to write any cryptographic validation code yourself. When you call `bot.handleHook(req)`, the SDK automatically:
-1. Extracts the `X-Scribble-Pub-Signature` header (which uses the `sha256=` prefix for cryptographic agility).
-2. Uses the native `crypto.subtle.verify` API to recalculate the HMAC hash using your secret token.
-3. Performs a constant-time cryptographic comparison to prevent timing attacks.
-
-If the signature is invalid or missing, `bot.handleHook` immediately returns a `401 Unauthorized` HTTP Response with a JSON body: `{ "error": "invalid signature" }`.
+The response contains an `ETag` that changes only when someone draws on the logo. Passing it back as `ifNoneMatch` makes the platform answer `304` and `getLogoImage` return `null` if the copy you already have is still current.
 
 ## Validation
 
-`handleHook` validates both directions of the exchange automatically. Every error response is JSON, shaped as `{ error: string, details?: ValidationError[] }`, where each `ValidationError` is `{ path: string, message: string }`:
+All inputs and outputs are strictly validated. If validation fails, details are provided as `{ path: string, message: string }` objects:
 
-- An incoming payload that doesn't match the expected shape returns `400 Bad Request` before your handler ever runs, with `details` describing which field failed and why.
-- If your handler returns actions that don't match the expected shape, `handleHook` returns `500` instead of forwarding bad data to the platform — again with `details`.
-- If no handler is registered for `"hook"`, it returns `501 Not Implemented`.
-
-```json
-{
-  "error": "invalid payload",
-  "details": [
-    { "path": "trigger.timestamp", "message": "Invalid input: expected number, received string" }
-  ]
-}
-```
-
-Calls you make *to* the platform are checked the same way, before anything goes over the network.
-`registerWebhook` and `sendActions` throw a `ScribblePubValidationError` whose `errors` array holds the same `ValidationError` values, 
-so you can react to the field that failed rather than parsing the message:
+- `handleHook` returns `400 Bad Request` for invalid incoming payloads, and `500 Internal Server Error` if your handler returns invalid actions.
+- `sendActions` and `registerWebhook` throw a `ScribblePubValidationError` before making the network request.
 
 ```typescript
 import { ScribblePubValidationError } from "@scribble-pub/bot-sdk"
 
 try {
     await bot.sendActions(room, actions)
-} catch (err) {
-    if (err instanceof ScribblePubValidationError) {
-        for (const { path, message } of err.errors) {
-            console.warn(`${path}: ${message}`)
-        }
-        return
+} catch (e) {
+    if (e instanceof ScribblePubValidationError) {
+        console.error(e.errors[0].path, e.errors[0].message)
     }
-    throw err
 }
 ```
 
 That makes the two failures distinguishable: `ScribblePubValidationError` never reached the network, while `ScribblePubApiError` means the platform saw the request and refused it.
 
-## Types & Actions
-
-Contrary to many other bot APIs, this API uses flat discriminated unions for its actions, giving you clean autocomplete and type-narrowing on `type`.
-
-```typescript
-const actions = [
-    {
-        type: "addMessage",
-        text: "Hello!",
-    }
-]
-```
-
-Every payload type is exported, so you can annotate a standalone handler instead of relying on inference:
-
-```typescript
-import type { HookRequest, HookResult } from "@scribble-pub/bot-sdk"
-
-function onMention(req: HookRequest): HookResult {
-    return [{ type: "addMessage", text: `Hi, ${req.trigger.username}!` }]
-}
-
-bot.on("hook", onMention)
-```
 ## Forward Compatibility (Important)
 As the platform evolves, new fields and message types will be added to the JSON payloads. 
 **Your bot must ignore any unrecognized fields or message types.** 

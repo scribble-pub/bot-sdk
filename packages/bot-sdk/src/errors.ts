@@ -2,7 +2,7 @@ import type { ValidationError } from "@scribble-pub/api"
 
 /**
  * Thrown when the API answers a bot-initiated request with a non-2xx status.
- * Carries the raw HTTP status and the error message.
+ * Contains the raw HTTP status and the error message.
  */
 export class ScribblePubApiError extends Error {
     readonly status: number

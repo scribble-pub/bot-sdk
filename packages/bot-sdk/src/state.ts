@@ -7,7 +7,7 @@ import type {
 } from "@scribble-pub/api"
 
 /**
- * A layer in the state tree.
+ * A layer in the state.
  *
  * The frames are also declared in layers: a frame exists because a layer has its ID in its `frames` array
  * and is dropped as soon as it's no longer there.
@@ -24,7 +24,7 @@ export type ScratchpadLayer = {
 }
 
 /**
- * A frame in the state tree. A child node of a layer.
+ * A frame in the state. A child node of a layer.
  */
 export type ScratchpadFrame = {
     frameId: number
@@ -42,7 +42,7 @@ export type ScratchpadFrame = {
 }
 
 /**
- * A drawn object in the state tree.
+ * A drawn object in the state.
  */
 export type ScratchpadObject = {
     objectId: number
@@ -129,7 +129,7 @@ export class ScratchpadState {
     }
 
     /**
-     * Applies the given RoomMessage to the state tree.
+     * Applies the given RoomMessage to the state.
      *
      * Unrecognized message types are ignored, so a newer platform can't break an older bot.
      *

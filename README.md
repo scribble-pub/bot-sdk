@@ -20,4 +20,4 @@ Implementations beyond this package:
 - **Java** — [hteariH/scribble-bot-sdk-java](https://github.com/hteariH/scribble-bot-sdk-java). Java 17+, with Spring Boot auto-configuration.
 
 > [!NOTE]
-> These are community projects, maintained by their authors rather than by scribble.pub. [`packages/api/src/schemas.ts`](./packages/api/src/schemas.ts) here remains the normative description of the wire format.
+> These are community projects, maintained by their authors rather than by scribble.pub. [`packages/api/src/schemas.ts`](./packages/api/src/schemas.ts) remains the reference description of the message format.
