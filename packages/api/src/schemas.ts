@@ -336,3 +336,19 @@ export interface GetRoomPreviewOptions {
      */
     ifModifiedSince?: string
 }
+
+/**
+ * Options for fetching the site logo image.
+ */
+export interface GetLogoOptions {
+    /**
+     * Defines the color of the letter borders. Defaults to `"light"`, which draws them black to be shown over a light background.
+     */
+    theme?: "light" | "dark"
+
+    /**
+     * An `ETag` from a previous response. If provided, the server returns a 304 Not Modified when
+     * nobody has drawn on the logo since, saving bandwidth.
+     */
+    ifNoneMatch?: string
+}

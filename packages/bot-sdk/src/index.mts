@@ -10,6 +10,7 @@ import type {
     ErrorResponse,
     HookRequest,
     GetRoomPreviewOptions,
+    GetLogoOptions,
     RoomStateResponse,
 } from "@scribble-pub/api"
 
@@ -30,6 +31,7 @@ export type {
     RegisterWebhookPayload,
     GetRoomStateMessagesOptions,
     GetRoomPreviewOptions,
+    GetLogoOptions,
     RoomMessage,
     RoomStateResponse,
     Trigger,
@@ -236,6 +238,31 @@ class ScribblePubBot {
             return null
         }
         await this.assertOk("get room preview", res)
+
+        return await res.arrayBuffer()
+    }
+
+    /**
+     * Fetches the site logo, drawn by the community pixel by pixel. See more at https://scribble.pub/docs/getting-started#logo-top-left.
+     *
+     * It arrives masked to the letter shapes, so everything around them is transparent,
+     * ready to be drawn over whatever your bot is drawing.
+     * Take its dimensions from the image itself and don't hardcode them since the logo can be resized in the future.
+     *
+     * @param options Optional parameters (e.g., { theme: "dark", ifNoneMatch: etag }).
+     * @returns An ArrayBuffer containing the PNG, or null if it was not modified (304).
+     *
+     * @throws {ScribblePubApiError} if the platform rejects the request.
+     */
+    async getLogoImage(options?: GetLogoOptions): Promise<ArrayBuffer | null> {
+        const res = await this.send("get logo", () =>
+            this.client.getLogo(this.client.baseUrl, options),
+        )
+
+        if (res.status === 304) {
+            return null
+        }
+        await this.assertOk("get logo", res)
 
         return await res.arrayBuffer()
     }

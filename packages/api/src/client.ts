@@ -4,6 +4,7 @@ import type {
     RoomStateResponse,
     GetRoomStateMessagesOptions,
     GetRoomPreviewOptions,
+    GetLogoOptions,
 } from "./schemas.js"
 
 /**
@@ -109,6 +110,30 @@ export class ScribblePubClient {
             headers["If-Modified-Since"] = options.ifModifiedSince
         }
         return await this.get(`${url}/api/v0/room/${encodeURIComponent(room)}/preview`, headers)
+    }
+
+    /**
+     * Fetches the site logo, drawn by the community pixel by pixel. See more at https://scribble.pub/docs/getting-started#logo-top-left.
+     *
+     * The body is a PNG, so read it with `arrayBuffer()` rather than `json()`.
+     * Take its dimensions from the image itself and don't hardcode them since the logo can be resized in the future.
+     * It is masked to the letter shapes, so everything around them is transparent,
+     * and the letters are bordered in the requested theme's color.
+     *
+     * The logo is not room-scoped, so this needs no room and no room permissions.
+     *
+     * Supports `If-None-Match` against the returned `ETag` to save bandwidth: if the logo has not
+     * been drawn on since, the platform answers 304 with no body at all.
+     *
+     * Calls `GET /api/v0/logo`
+     */
+    async getLogo(url: string, options?: GetLogoOptions): Promise<Response> {
+        const headers: Record<string, string> = {}
+        if (options?.ifNoneMatch) {
+            headers["If-None-Match"] = options.ifNoneMatch
+        }
+        const theme = options?.theme === "dark" ? "?theme=dark" : ""
+        return await this.get(`${url}/api/v0/logo${theme}`, headers)
     }
 
     /**

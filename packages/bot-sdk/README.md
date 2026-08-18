@@ -196,9 +196,25 @@ That is byte for byte the CSS `#rrggbbaa` notation, so `rgbaToHex` just formats 
 ```typescript
 import { rgbaToHex, rgbaToComponents } from "@scribble-pub/bot-sdk"
 
-ctx.strokeStyle = rgbaToHex(object.color)   // "#dbffb9ff"
-const { r, g, b, a } = rgbaToComponents(object.color)
+ctx.strokeStyle = rgbaToHex(object.rgba)   // "#dbffb9ff"
+const { r, g, b, a } = rgbaToComponents(object.rgba)
 ```
+
+## The site logo
+
+The logo at the top of scribble.pub [is drawn by the community](https://scribble.pub/docs/getting-started#logo-top-left), pixel by pixel. Use `getLogoImage` to get it as a PNG:
+
+```typescript
+const png = await bot.getLogoImage()
+```
+
+It arrives in the same form as users see it in the browser: masked to the letter shapes, with the letter borders painted in. Areas between the letters are transparent. Pass `{ theme: "dark" }` for white borders instead of black.
+
+It is currently 350 × 60, but read the dimensions from the PNG rather than hardcoding them, since it can be resized in the future.
+
+The logo is not room-scoped, so this call takes no room and needs no room permissions.
+
+The response carries an `ETag` that changes only when someone draws on the logo. Passing it back as `ifNoneMatch` makes the platform answer `304` and `getLogoImage` return `null`, meaning the copy you already have is still current.
 
 ## Security (HMAC-SHA256 Signatures)
 
