@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest"
-import { rgbaToHex, rgbaToComponents } from "../src/color.js"
+import { describe, expect, it } from "vitest"
+import { rgbaToComponents, rgbaToHex } from "../src/color.js"
 
 describe("rgbaToHex", () => {
     it("should format a color as CSS #rrggbbaa", () => {

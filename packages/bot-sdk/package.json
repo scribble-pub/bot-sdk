@@ -1,6 +1,6 @@
 {
     "name": "@scribble-pub/bot-sdk",
-    "version": "0.3.0-SNAPSHOT",
+    "version": "0.3.0",
     "description": "The official Scribble.pub TypeScript bot SDK.",
     "license": "MIT",
     "repository": {

@@ -9,6 +9,72 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 Because this package is also the reference implementation of the Bot API,
 each release provides API changes as well to help developing custom clients.
 
+## [0.3.0] - 2026-08-20
+
+**Package split**: The package is split into two: `@scribble-pub/api` and `@scribble-pub/bot-sdk`.
+- `@scribble-pub/api` defines the protocol itself: messages, their Zod parsers and the signature.
+It also includes `ScribblePubClient`, a thin one-method-per-endpoint HTTP client returning raw responses.
+- `@scribble-pub/bot-sdk` is the reference implementation of how this protocol should be used,
+how the canvas state is built from the messages, edge cases, room host server caching, etc.
+
+### Server API
+
+#### Breaking
+
+No breaking changes.
+
+#### Deprecated
+
+- The action format is changed to reflect the target app name: `chat.addMessage` replaces `addMessage`.
+  The unprefixed spelling is still accepted, but deprecated, and is going to be removed before 1.0.
+
+#### New
+
+New endpoints:
+
+- `GET /api/v0/room/{room}/state` — returns `{"messages": [...]}`, the events that define the room state.
+  Currently, only the static snapshot is provided: one frame per layer. Full animation timelines will be available later.
+  The message types are `sp.sessionMeta`, `sp.layer`, `sp.layerOrder`, `sp.object`, and `sp.lastEventId`.
+  Checl [API schemas](packages/api/src/schemas.ts) for details.
+- `GET /api/v0/room/{room}/preview` — the room canvas as a PNG, at a 0.6px scale (which is currently always 600 × 420 px),
+  the same image the big room list shows. `Last-Modified` can be passed to `If-Modified-Since`,
+  so that a `304 Not modified` and no body are returned if it hasn't changed since.
+- `GET /api/v0/logo` — the site logo in PNG, drawn by the community pixel by pixel, with the letters carved in.
+  `?theme=dark` paints the letter borders white instead of black. Pass the returned `ETag` back as
+  `If-None-Match` to receive `304 Not modified` same way as with the room preview.
+  The logo is global-scoped, doesn't require providing a room name and having any permissions.
+
+### SDK
+
+#### Breaking
+
+No breaking changes. `@scribble-pub/bot-sdk` keeps exporting everything it exported before.
+
+#### Deprecated
+
+- SDK users should respect the underlying API change mentioned above: `chat.addMessage` replaces `addMessage`.
+
+#### Added
+
+- `bot.getRoomStateMessages(room)` — fetches the room state as the raw `RoomMessage` list.
+- `bot.getRoomState(room)` — the same, reduced into a `RoomState`. Reducing a message list you already
+  have is `RoomState.fromMessages(messages)`. Today it holds a single app, `state.scratchpad`.
+  **The state is mutable**: a room can contain tens of thousands of objects, and cloning it on every
+  event would cost far more than it gives. From the outside it is read-only, exposed as `ReadonlyMap`s
+  and readonly arrays.
+- `state.applyMessage(msg)` and `state.applyMessages(messages)` — feed later messages into a state you
+  already hold, instead of fetching it again.
+- `bot.getRoomPreviewImage(room, options?)` — returns a `RoomPreviewImage`, `{ image, lastModified }`,
+  or `null` when the preview was not modified. `lastModified` goes back as `options.ifModifiedSince`
+  on the next call.
+- `bot.getLogoImage(options?)` — returns a `LogoImage`, `{ image, etag }`, or `null` when the logo was
+  not modified. `etag` goes back as `options.ifNoneMatch` on the next call. `options.theme` defines the
+  border color.
+- `rgbaToHex` and `rgbaToComponents`, for turning a packed color into a canonical form.
+- **Hook handlers may be asynchronous again.** `bot.on("hook", …)` accepts a promise once more, so a short
+  await — such as registering the hook in a database — can happen inline. The 10-second deadline
+  is unchanged, so anything slower should still use `sendActions`.
+
 ## [0.2.0] - 2026-08-14
 
 ### Server API

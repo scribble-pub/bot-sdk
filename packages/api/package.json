@@ -1,8 +1,11 @@
 {
     "name": "@scribble-pub/api",
-    "version": "0.3.0-SNAPSHOT",
-    "description": "The official Scribble.pub TypeScript API client and schema definitions.",
+    "version": "0.3.0",
+    "description": "The official Scribble.pub protocol definitions and TypeScript client and schema for it.",
     "license": "MIT",
+    "publishConfig": {
+        "access": "public"
+    },
     "type": "module",
     "main": "./dist/index.mjs",
     "types": "./dist/index.d.mts",

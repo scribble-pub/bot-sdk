@@ -2,12 +2,12 @@ import { createServer } from "node:http"
 import type { AddressInfo } from "node:net"
 import { Hono } from "hono"
 import { afterEach, describe, expect, it, vi } from "vitest"
+import type { Action, HookRequest, HookResponse, Trigger } from "../src/index.mjs"
 import ScribblePubBot, {
     ScribblePubApiError,
     ScribblePubValidationError,
     type ValidationError,
 } from "../src/index.mjs"
-import type { Action, HookRequest, HookResponse, Trigger } from "../src/index.mjs"
 
 const TOKEN = "test-secret-token"
 const AP = "https://ap.scribble.pub"

@@ -1,9 +1,9 @@
-import { describe, it, expect } from "vitest"
 import type {
-    ScratchpadSessionMetaMessage,
     ScratchpadLayerMessage,
     ScratchpadObjectMessage,
+    ScratchpadSessionMetaMessage,
 } from "@scribble-pub/api"
+import { describe, expect, it } from "vitest"
 import { RoomState, ScratchpadState } from "../src/state.js"
 
 const meta = (currentSession: number, eventId = 1): ScratchpadSessionMetaMessage => ({

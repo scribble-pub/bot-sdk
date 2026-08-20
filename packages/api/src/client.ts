@@ -1,10 +1,10 @@
 import type {
+    GetLogoOptions,
+    GetRoomPreviewOptions,
+    GetRoomStateMessagesOptions,
     HookResponse,
     RegisterWebhookPayload,
     RoomStateResponse,
-    GetRoomStateMessagesOptions,
-    GetRoomPreviewOptions,
-    GetLogoOptions,
 } from "./schemas.js"
 
 /**

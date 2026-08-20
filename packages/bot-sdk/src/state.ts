@@ -1,9 +1,9 @@
 import type {
     RoomMessage,
-    ScratchpadSessionMetaMessage,
     ScratchpadLayerMessage,
     ScratchpadObjectMessage,
     ScratchpadObjectPayload,
+    ScratchpadSessionMetaMessage,
 } from "@scribble-pub/api"
 
 /**
