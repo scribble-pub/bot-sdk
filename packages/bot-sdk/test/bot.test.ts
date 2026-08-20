@@ -54,7 +54,7 @@ describe("scribble.pub bot with Hono", () => {
         bot.on("hook", (req) => {
             return [
                 {
-                    type: "addMessage",
+                    type: "chat.addMessage",
                     text: `Responding to ${req.trigger.username} who wrote '${req.trigger.text}'`,
                 },
             ]
@@ -86,7 +86,7 @@ describe("scribble.pub bot with Hono", () => {
         expect(data).toEqual({
             actions: [
                 {
-                    type: "addMessage",
+                    type: "chat.addMessage",
                     text: "Responding to TheBestArtist who wrote '@TestBot hello'",
                 },
             ],
@@ -127,7 +127,7 @@ describe("scribble.pub bot with Hono", () => {
 
         bot.on("hook", async (req) => {
             await new Promise((resolve) => setTimeout(resolve, 5))
-            return [{ type: "addMessage", text: `Hi, ${req.trigger.username}!` }]
+            return [{ type: "chat.addMessage", text: `Hi, ${req.trigger.username}!` }]
         })
 
         const payload = JSON.stringify({
@@ -152,7 +152,7 @@ describe("scribble.pub bot with Hono", () => {
 
         expect(res.status).toBe(200)
         expect(await res.json()).toEqual({
-            actions: [{ type: "addMessage", text: "Hi, TheBestArtist!" }],
+            actions: [{ type: "chat.addMessage", text: "Hi, TheBestArtist!" }],
         } as HookResponse)
     })
 
@@ -242,7 +242,7 @@ describe("scribble.pub bot with Hono", () => {
     it("rejects when the handler returns invalid actions", async () => {
         const bot = new ScribblePubBot({ token: TOKEN })
         // @ts-expect-error intentionally returning a malformed action to test the guardrail
-        bot.on("hook", () => [{ type: "addMessage" }])
+        bot.on("hook", () => [{ type: "chat.addMessage" }])
 
         const payload = JSON.stringify({
             trigger: {
@@ -357,7 +357,7 @@ describe("registerWebhook", () => {
 })
 
 describe("sendActions", () => {
-    const HELLO = [{ type: "addMessage", text: "hi" }] as const satisfies Action[]
+    const HELLO = [{ type: "chat.addMessage", text: "hi" }] as const satisfies Action[]
 
     afterEach(() => {
         vi.unstubAllGlobals()
@@ -467,7 +467,7 @@ describe("sendActions", () => {
 
         await expect(
             // @ts-expect-error intentionally malformed to test the guardrail
-            bot.sendActions("main", [{ type: "addMessage" }]),
+            bot.sendActions("main", [{ type: "chat.addMessage" }]),
         ).rejects.toThrow(/invalid actions: actions\.0\.text/)
         expect(fetchMock).not.toHaveBeenCalled()
     })
@@ -477,7 +477,7 @@ describe("sendActions", () => {
 
         const error = await bot
             // @ts-expect-error intentionally malformed to test the guardrail
-            .sendActions("main", [{ type: "addMessage" }, { type: "nope", text: "x" }])
+            .sendActions("main", [{ type: "chat.addMessage" }, { type: "nope", text: "x" }])
             .catch((e) => e)
 
         expect(error).toBeInstanceOf(ScribblePubValidationError)

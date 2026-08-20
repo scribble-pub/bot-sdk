@@ -19,7 +19,7 @@ bot.on("hook", (req) => {
     console.log(`[Bot] Received event: ${req}`)
     return [
         {
-            type: "addMessage",
+            type: "chat.addMessage",
             text: `Hi ${req.trigger.username}! You wrote '${req.trigger.text}' to me.`,
         },
     ]

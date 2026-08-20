@@ -24,7 +24,9 @@ export type { ValidationError } from "@scribble-pub/api"
 
 export type {
     Action,
+    AddMessageAction,
     AddMessagePayload,
+    LegacyAddMessageAction,
     ErrorResponse,
     HookRequest,
     HookResponse,
@@ -66,6 +68,38 @@ export type BotConfig = {
      * Defaults to "https://scribble.pub".
      */
     baseUrl?: string | undefined
+}
+
+/**
+ * A room preview PNG together with the validator to ask for it again.
+ */
+export type RoomPreviewImage = {
+    /**
+     * The PNG bytes. Decode them with whatever image library your bot already uses.
+     */
+    image: ArrayBuffer
+
+    /**
+     * The `Last-Modified` date of this preview, ready to be passed back as
+     * {@link GetRoomPreviewOptions.ifModifiedSince} on the next call.
+     */
+    lastModified: string | undefined
+}
+
+/**
+ * The site logo PNG together with the validator to ask for it again.
+ */
+export type LogoImage = {
+    /**
+     * The PNG bytes, masked to the letter shapes.
+     */
+    image: ArrayBuffer
+
+    /**
+     * The `ETag` of this logo, ready to be passed back as
+     * {@link GetLogoOptions.ifNoneMatch} on the next call.
+     */
+    etag: string | undefined
 }
 
 /**
@@ -184,7 +218,7 @@ class ScribblePubBot {
      * Future versions of the API are going to provide the full state.
      *
      * @param room The ID of the room.
-     * @param options Optional parameters for fetching messages (e.g., { sinceEventId: 1234 }).
+     * @param options Future optional parameters for fetching messages
      *
      * @throws {ScribblePubValidationError} if `room` fails validation.
      * @throws {ScribblePubApiError} if the platform rejects the request.
@@ -219,9 +253,12 @@ class ScribblePubBot {
     /**
      * Fetches a low-res (600x420) raster preview of the room.
      *
+     * Keep the returned `lastModified` and pass it back as `ifModifiedSince` on the next call
+     * to skip re-downloading a preview if nobody has changed it since.
+     *
      * @param room The ID of the room.
      * @param options Optional parameters (e.g., { ifModifiedSince: "Mon, 17 Aug 2026 13:43:50 GMT" }).
-     * @returns An ArrayBuffer containing the PNG image, or null if it was not modified (304).
+     * @returns The PNG image and its `Last-Modified` date, or null if it was not modified (304).
      *
      * @throws {ScribblePubValidationError} if `room` fails validation.
      * @throws {ScribblePubApiError} if the platform rejects the request.
@@ -229,7 +266,7 @@ class ScribblePubBot {
     async getRoomPreviewImage(
         room: string,
         options?: GetRoomPreviewOptions,
-    ): Promise<ArrayBuffer | null> {
+    ): Promise<RoomPreviewImage | null> {
         this.assertRoom(room)
 
         // Reads are served by whichever replica answers.
@@ -242,7 +279,10 @@ class ScribblePubBot {
         }
         await this.assertOk("get room preview", res)
 
-        return await res.arrayBuffer()
+        return {
+            image: await res.arrayBuffer(),
+            lastModified: res.headers.get("last-modified") ?? undefined,
+        }
     }
 
     /**
@@ -252,12 +292,15 @@ class ScribblePubBot {
      * ready to be drawn over whatever your bot is drawing.
      * Take its dimensions from the image itself and don't hardcode them since the logo can be resized in the future.
      *
+     * Keep the returned `etag` and pass it back as `ifNoneMatch` on the next call
+     * to skip re-downloading the logo if nobody has drawn there since.
+     *
      * @param options Optional parameters (e.g., { theme: "dark", ifNoneMatch: etag }).
-     * @returns An ArrayBuffer containing the PNG, or null if it was not modified (304).
+     * @returns The PNG and its `ETag`, or null if it was not modified (304).
      *
      * @throws {ScribblePubApiError} if the platform rejects the request.
      */
-    async getLogoImage(options?: GetLogoOptions): Promise<ArrayBuffer | null> {
+    async getLogoImage(options?: GetLogoOptions): Promise<LogoImage | null> {
         const res = await this.send("get logo", () =>
             this.client.getLogo(this.client.baseUrl, options),
         )
@@ -267,7 +310,10 @@ class ScribblePubBot {
         }
         await this.assertOk("get logo", res)
 
-        return await res.arrayBuffer()
+        return {
+            image: await res.arrayBuffer(),
+            etag: res.headers.get("etag") ?? undefined,
+        }
     }
 
     /**

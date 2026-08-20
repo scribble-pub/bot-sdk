@@ -24,8 +24,9 @@ const RegisterWebhookPayloadSchema: z.ZodType<RegisterWebhookPayload> = z.object
     url: z.url({ protocol: /^https?$/ }),
 })
 
+// "addMessage" is the deprecated spelling of "chat.addMessage", accepted until it is removed before 1.0.
 const ActionSchema: z.ZodType<Action> = z.object({
-    type: z.literal("addMessage"),
+    type: z.literal(["chat.addMessage", "addMessage"]),
     text: z.string(),
 })
 

@@ -62,11 +62,23 @@ export type AddMessagePayload = {
 }
 
 /**
+ * Posts a chat message into the room as the bot.
+ */
+export type AddMessageAction = { type: "chat.addMessage" } & AddMessagePayload
+
+/**
+ * The unprefixed spelling of {@link AddMessageAction}, still accepted by the platform.
+ *
+ * @deprecated Use `"chat.addMessage"`. Support for this spelling will be removed before 1.0.
+ */
+export type LegacyAddMessageAction = { type: "addMessage" } & AddMessagePayload
+
+/**
  * A single operation your bot wants to perform in the room.
  * This is designed as a "Flat Discriminated Union", meaning the 'type' field
  * dictates which payload fields are required next to it.
  */
-export type Action = { type: "addMessage" } & AddMessagePayload
+export type Action = AddMessageAction | LegacyAddMessageAction
 
 /**
  * The JSON payload your bot server must return to scribble.pub.

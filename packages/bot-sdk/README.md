@@ -26,7 +26,7 @@ bot.on("hook", (req) => {
     // Return an array of actions for the platform to execute in the room
     return [
         {
-            type: "addMessage",
+            type: "chat.addMessage",
             text: `You said: ${req.trigger.text}`,
         },
     ]
@@ -101,7 +101,7 @@ A custom `baseUrl` also switches off the built-in room-to-instance table, which 
 You can send actions proactively:
 
 ```typescript
-await bot.sendActions("main", [{ type: "addMessage", text: "Good morning!" }])
+await bot.sendActions("main", [{ type: "chat.addMessage", text: "Good morning!" }])
 ```
 
 If your bot requires longer work such as media processing or LLM querying, you must give the hook response as soon as possible. When the work is done, send the result by using `sendActions`, which makes a separate request to the room directly.
@@ -192,7 +192,7 @@ For a user-facing explanation of layers and animation frames, see [scribble.pub/
 
 ### Concepts: the canvas
 
-The coordinates you receive are in the `canvasWidth` × `canvasHeight` space (provided in the `sp.sessionMeta` event), which is currently 1000 × 700 but may change or become dynamic in the future. (0,0) represents top-left. The raster preview from `getRoomPreviewImage` is the same canvas at a 0.6px scale (so typically 600 × 420 px), the same used in the big room list from UI.
+The coordinates you receive are in the `canvasWidth` × `canvasHeight` space (provided in the `sp.sessionMeta` event), which is currently 1000 × 700 but may change or become dynamic in the future. (0,0) represents top-left. The [raster preview](#the-room-preview) is the same canvas at a 0.6px scale (so typically 600 × 420 px), the same used in the big room list from UI.
 
 Colors are transfered as a single RGBA integer, 1 byte each component: `R << 24 | G << 16 | B << 8 | A`, reflecting the CSS RGBA HEX notation. This is not ARGB that is also commonly used: `0xff0000ff` is opaque red.
 
@@ -205,12 +205,42 @@ ctx.strokeStyle = rgbaToHex(object.rgba)   // "#dbffb9ff"
 const { r, g, b, a } = rgbaToComponents(object.rgba)
 ```
 
+## The room preview
+
+`getRoomPreviewImage` returns the room's raster preview as a PNG — the same image the big room list shows in the UI:
+
+```typescript
+const preview = await bot.getRoomPreviewImage("main")
+if (preview) {
+    drawSomehow(preview.image)   // an ArrayBuffer of PNG bytes
+}
+```
+
+It is the canvas at a 0.6px scale, resulting in a 600 × 420 px image. As with the canvas itself, read the dimensions from the PNG because they may change.
+
+Unlike a full state fetch, this costs you one small image of a relatively predictable size instead of every object in the room. It suits bots that only need a surface look rather than inspect its content.
+
+The result contains the response's `Last-Modified` date, which changes when the room is drawn on. You can provide it as `ifModifiedSince` next request: the platform will answer `304` and `getRoomPreviewImage` return `null` if nothing has changed.
+
+```typescript
+let preview = await bot.getRoomPreviewImage("main")
+
+// Later, e.g. on the next hook:
+const fresh = await bot.getRoomPreviewImage("main", { ifModifiedSince: preview?.lastModified })
+if (fresh) preview = fresh   // null means the preview has not changed
+```
+
+`lastModified` is optional, and skipping it just fetches the image again.
+
 ## The site logo
 
 The logo at the top of scribble.pub [is drawn by the community](https://scribble.pub/docs/getting-started#logo-top-left), pixel by pixel. Use `getLogoImage` to get it as a PNG:
 
 ```typescript
-const png = await bot.getLogoImage()
+const logo = await bot.getLogoImage()
+if (logo) {
+    drawSomehow(logo.image)   // an ArrayBuffer of PNG bytes
+}
 ```
 
 It arrives in the same form as users see it in the browser: masked to the letter shapes, with the letter borders painted in. Areas between the letters are transparent. Pass `{ theme: "dark" }` for white borders instead of black.
@@ -219,7 +249,17 @@ It is currently 350 × 60, but read the dimensions from the PNG rather than hard
 
 The logo is not room-scoped, so this call takes no room and needs no room permissions.
 
-The response contains an `ETag` that changes only when someone draws on the logo. Passing it back as `ifNoneMatch` makes the platform answer `304` and `getLogoImage` return `null` if the copy you already have is still current.
+The result contains the response's `ETag`, which changes only when someone draws on the logo. You can provide it as `ifNoneMatch` next request: the platform will answer `304` and `getLogoImage` return `null` if nothing has changed.
+
+```typescript
+let logo = await bot.getLogoImage()
+
+// Later, e.g. on the next hook:
+const fresh = await bot.getLogoImage({ ifNoneMatch: logo?.etag })
+if (fresh) logo = fresh   // null means the logo has not changed
+```
+
+As with the room preview, `etag` is optional, and skipping it just fetches the full logo again.
 
 ## Validation
 
