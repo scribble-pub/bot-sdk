@@ -270,7 +270,7 @@ export class ScratchpadState {
 /**
  * A mutable state for a scribble.pub room.
  *
- * It holds substates per room apps (scratchpad, chat) and routes incoming `RoomMessage` to them.
+ * No built-in feature uses it, but it's a convenient container with a message router for the final usages.
  */
 export class RoomState {
     /**

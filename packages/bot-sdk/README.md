@@ -138,34 +138,50 @@ Rooms are served by regional instances. The platform and the SDK provide a fully
 
 Each redirect is cached, and every hook caches the instance address from `trigger.directUrl`, so repeat calls to a room go straight to the right instance.
 
-Only mutating actions need this. Reads (such as `getRoomStateMessages`) are served by all instances.
+Only mutating actions need this. Reads (such as `getScratchpadStateMessages`) are served by all instances.
 
 Internally, encrypted credentials are substituted for the redirect link, so the authorization token is never lost, and no complex redirecting logic is required by the SDK.
 
 ## State Management
 
-When you fetch the room state via `bot.getRoomStateMessages` (or receive it via a websocket in the future), you get a `RoomStateResponse` wrapping the `RoomMessage` events that (re)build the room.
+State is fetched **per room app**. When you fetch the scratchpad via `bot.getScratchpadStateMessages` (or receive it via a websocket in the future), you get a `ScratchpadStateResponse` wrapping the `ScratchpadMessage` events that (re)build the drawing surface.
 
-The SDK provides a `RoomState` helper class that reduces the message stream into a local state:
+The SDK provides a `ScratchpadState` helper class that reduces the message stream into a local state:
 
 ```typescript
-import { RoomState } from "@scribble-pub/bot-sdk"
+import { ScratchpadState } from "@scribble-pub/bot-sdk"
 
-const state = RoomState.fromMessages(response.messages)
+const state = ScratchpadState.fromMessages(response.messages)
 
 // Query the state
-console.log(`There are ${state.scratchpad.layers.size} layers in the room!`)
+console.log(`There are ${state.layers.size} layers in the room!`)
 ```
 
-`RoomState` holds one substate per room subsystem and routes each message to the one that owns it. Today that is only `state.scratchpad`, a `ScratchpadState` covering the drawing surface.
-
-`bot.getRoomState` does both steps in one call:
+`bot.getScratchpadState` does both steps in one call:
 
 ```typescript
-const state = await bot.getRoomState("main")
+const state = await bot.getScratchpadState("main")
 ```
 
 The state is read-only from the outside: local fields are exposed as `ReadonlyMap`s and readonly arrays.
+
+### Why per-app, and not per-room
+
+The scratchpad and the chat are separate apps that share only a room name. They take separate locks, keep separate event counters, and expire on completely different schedules: clearing the canvas resets the scratchpad to an empty session (the old one is kept as a historical snapshot) and leaves the chat untouched, while chat messages disappear on their own after two days.
+
+So a combined fetch could never hand you a single consistent room snapshot — it would stitch two independently taken ones — and it would force one cursor and one `ETag` to stand for two things that go stale for different reasons. Fetching each app on its own costs a bot nothing: almost no bot needs both, and the ones that do can ask in parallel.
+
+If you would rather carry a whole room as a single value — say your bot tracks several rooms at once — `RoomState` holds one substate per app and gives you `state.scratchpad`:
+
+```typescript
+const room = RoomState.fromMessages(response.messages)
+console.log(room.scratchpad.layers.size)
+```
+
+It is a convenience, not a requirement: a bot that only follows the drawing surface can use `ScratchpadState` directly.
+
+> [!NOTE]
+> Messages from different apps are never ordered against each other. The scratchpad can post to the chat asynchronously, so a chat message announcing a canvas clear may arrive before or after the `sp.sessionMeta` that performs it. Never correlate the two streams by arrival order or timestamp — take canvas facts from the scratchpad stream, which carries them in typed form.
 
 ### State entities vs. messages
 
@@ -192,7 +208,7 @@ For a user-facing explanation of layers and animation frames, see [scribble.pub/
 
 ### Concepts: the canvas
 
-The coordinates you receive are in the `canvasWidth` × `canvasHeight` space (provided in the `sp.sessionMeta` event), which is currently 1000 × 700 but may change or become dynamic in the future. (0,0) represents top-left. The [raster preview](#the-room-preview) is the same canvas at a 0.6px scale (so typically 600 × 420 px), the same used in the big room list from UI.
+The coordinates you receive are in the `canvasWidth` × `canvasHeight` space (provided in the `sp.sessionMeta` event), which is currently 1000 × 700 but may change or become dynamic in the future. (0,0) represents top-left. The [raster preview](#the-scratchpad-preview) is the same canvas at a 0.6px scale (so typically 600 × 420 px), the same used in the big room list from UI.
 
 Colors are transfered as a single RGBA integer, 1 byte each component: `R << 24 | G << 16 | B << 8 | A`, reflecting the CSS RGBA HEX notation. This is not ARGB that is also commonly used: `0xff0000ff` is opaque red.
 
@@ -205,12 +221,12 @@ ctx.strokeStyle = rgbaToHex(object.rgba)   // "#dbffb9ff"
 const { r, g, b, a } = rgbaToComponents(object.rgba)
 ```
 
-## The room preview
+## The scratchpad preview
 
-`getRoomPreviewImage` returns the room's raster preview as a PNG — the same image the big room list shows in the UI:
+`getScratchpadPreviewImage` returns the scratchpad's raster preview as a PNG — the same image the big room list shows in the UI:
 
 ```typescript
-const preview = await bot.getRoomPreviewImage("main")
+const preview = await bot.getScratchpadPreviewImage("main")
 if (preview) {
     drawSomehow(preview.image)   // an ArrayBuffer of PNG bytes
 }
@@ -220,13 +236,13 @@ It is the canvas at a 0.6px scale, resulting in a 600 × 420 px image. As with t
 
 Unlike a full state fetch, this costs you one small image of a relatively predictable size instead of every object in the room. It suits bots that only need a surface look rather than inspect its content.
 
-The result contains the response's `Last-Modified` date, which changes when the room is drawn on. You can provide it as `ifModifiedSince` next request: the platform will answer `304` and `getRoomPreviewImage` return `null` if nothing has changed.
+The result contains the response's `Last-Modified` date, which changes when the room is drawn on. You can provide it as `ifModifiedSince` next request: the platform will answer `304` and `getScratchpadPreviewImage` return `null` if nothing has changed.
 
 ```typescript
-let preview = await bot.getRoomPreviewImage("main")
+let preview = await bot.getScratchpadPreviewImage("main")
 
 // Later, e.g. on the next hook:
-const fresh = await bot.getRoomPreviewImage("main", { ifModifiedSince: preview?.lastModified })
+const fresh = await bot.getScratchpadPreviewImage("main", { ifModifiedSince: preview?.lastModified })
 if (fresh) preview = fresh   // null means the preview has not changed
 ```
 
@@ -259,7 +275,7 @@ const fresh = await bot.getLogoImage({ ifNoneMatch: logo?.etag })
 if (fresh) logo = fresh   // null means the logo has not changed
 ```
 
-As with the room preview, `etag` is optional, and skipping it just fetches the full logo again.
+As with the scratchpad preview, `etag` is optional, and skipping it just fetches the full logo again.
 
 ## Validation
 

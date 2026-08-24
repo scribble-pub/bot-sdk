@@ -2,9 +2,12 @@ import type {
     GetLogoOptions,
     GetRoomPreviewOptions,
     GetRoomStateMessagesOptions,
+    GetScratchpadPreviewOptions,
+    GetScratchpadStateOptions,
     HookResponse,
     RegisterWebhookPayload,
     RoomStateResponse,
+    ScratchpadStateResponse,
 } from "./schemas.js"
 
 /**
@@ -62,7 +65,7 @@ export class ScribblePubClient {
     }
 
     /**
-     * Gets the state of a room as a list of messages that can be used to restore the state.
+     * Gets the state of a room's scratchpad as a list of messages that can be used to restore it.
      *
      * Currently, this only returns the currently visible static snapshot of the room, omitting full animation timelines.
      * For most layers, this means only the first frame is returned.
@@ -70,46 +73,73 @@ export class ScribblePubClient {
      * the currently rolled frame is returned instead.
      * Future versions of the API are going to support full state fetching.
      *
+     * Calls `GET /api/v0/room/{room}/scratchpad/state`
+     */
+    async getScratchpadState(
+        url: string,
+        room: string,
+        options?: GetScratchpadStateOptions,
+    ): Promise<TypedResponse<ScratchpadStateResponse>> {
+        const endpoint = `${url}/api/v0/room/${encodeURIComponent(room)}/scratchpad/state`
+        return await this.get(this.withQuery(endpoint, options))
+    }
+
+    /**
+     * Gets the state of a room as a list of messages that can be used to restore the state.
+     *
      * Calls `GET /api/v0/room/{room}/state`
+     *
+     * @deprecated since 0.4.0, use {@link ScribblePubClient.getScratchpadState}.
+     * The single room state endpoint is replaced by per-app endpoints. The platform keeps
+     * serving this path until 0.5.0, when both it and this method are removed.
      */
     async getRoomState(
         url: string,
         room: string,
         options?: GetRoomStateMessagesOptions,
     ): Promise<TypedResponse<RoomStateResponse>> {
-        let endpoint = `${url}/api/v0/room/${encodeURIComponent(room)}/state`
-        if (options && Object.keys(options).length > 0) {
-            const params = new URLSearchParams()
-            for (const [key, value] of Object.entries(options)) {
-                if (value !== undefined) {
-                    params.set(key, String(value))
-                }
-            }
-            endpoint += `?${params.toString()}`
-        }
-
-        return await this.get(endpoint)
+        const endpoint = `${url}/api/v0/room/${encodeURIComponent(room)}/state`
+        return await this.get(this.withQuery(endpoint, options))
     }
 
     /**
-     * Fetches a low-res (600x420px) raster preview of the room, a 0.6px scale of the 1000x700 canvas.
+     * Fetches a low-res (600x420px) raster preview of the scratchpad, a 0.6px scale of the 1000x700 canvas.
      *
      * The body is a PNG, so read it with `arrayBuffer()` rather than `json()`.
      * Supports `If-Modified-Since` to save bandwidth: if the preview has not been modified,
      * the platform answers 304 with no body at all.
      *
+     * Calls `GET /api/v0/room/{room}/scratchpad/preview`
+     */
+    async getScratchpadPreview(
+        url: string,
+        room: string,
+        options?: GetScratchpadPreviewOptions,
+    ): Promise<Response> {
+        return await this.get(
+            `${url}/api/v0/room/${encodeURIComponent(room)}/scratchpad/preview`,
+            this.ifModifiedSince(options),
+        )
+    }
+
+    /**
+     * Fetches a low-res (600x420px) raster preview of the room, a 0.6px scale of the 1000x700 canvas.
+     *
      * Calls `GET /api/v0/room/{room}/preview`
+     *
+     * @deprecated since 0.4.0, use {@link ScribblePubClient.getScratchpadPreview}.
+     * The preview renders the scratchpad, so it moved under the `/scratchpad` infix.
+     * The platform keeps serving this path until 0.5.0.
      */
     async getRoomPreview(
         url: string,
         room: string,
         options?: GetRoomPreviewOptions,
     ): Promise<Response> {
-        const headers: Record<string, string> = {}
-        if (options?.ifModifiedSince) {
-            headers["If-Modified-Since"] = options.ifModifiedSince
-        }
-        return await this.get(`${url}/api/v0/room/${encodeURIComponent(room)}/preview`, headers)
+        return await this.get(
+            `${url}/api/v0/room/${encodeURIComponent(room)}/preview`,
+            this.ifModifiedSince(options),
+        )
     }
 
     /**
@@ -134,6 +164,33 @@ export class ScribblePubClient {
         }
         const theme = options?.theme === "dark" ? "?theme=dark" : ""
         return await this.get(`${url}/api/v0/logo${theme}`, headers)
+    }
+
+    /**
+     * Adds the request header for an image endpoint if a validator was given.
+     */
+    private ifModifiedSince(options?: GetScratchpadPreviewOptions): Record<string, string> {
+        return options?.ifModifiedSince ? { "If-Modified-Since": options.ifModifiedSince } : {}
+    }
+
+    /**
+     * Appends the options to an endpoint as a query string,
+     * leaving the endpoint untouched when there is nothing to add.
+     */
+    private withQuery(endpoint: string, options?: Record<string, unknown>): string {
+        if (!options) {
+            return endpoint
+        }
+
+        const params = new URLSearchParams()
+        for (const [key, value] of Object.entries(options)) {
+            if (value !== undefined) {
+                params.set(key, String(value))
+            }
+        }
+
+        const query = params.toString()
+        return query ? `${endpoint}?${query}` : endpoint
     }
 
     /**

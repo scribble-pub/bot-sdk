@@ -320,27 +320,47 @@ export type ScratchpadObjectPayloadLineFloats = {
 export type ScratchpadObjectPayload = ScratchpadObjectPayloadLineFloats
 
 /**
+ * The body returned by a scratchpad state fetch.
+ *
+ * The messages (re)build the scratchpad state and are closed by the session event counter,
+ * {@link ScratchpadLastEventIdMessage}.
+ */
+export type ScratchpadStateResponse = {
+    /**
+     * The messages building the scratchpad state, in the order they must be applied.
+     */
+    messages: ScratchpadMessage[]
+}
+
+/**
  * The body returned by a room state fetch.
+ *
+ * @deprecated since 0.4.0. The single room state endpoint is replaced by per-app endpoints;
+ * use {@link ScratchpadStateResponse}. Removed in 0.5.0.
  */
 export type RoomStateResponse = {
     /**
      * The messages rebuilding the room state, in the order they must be applied.
-     *
-     * Each app (scratchpad or chat) closes its own section with its event counter,
-     * such as {@link ScratchpadLastEventIdMessage}.
      */
     messages: RoomMessage[]
 }
 
 /**
- * Options for fetching room messages, left for future polling/delta parameters.
+ * Options for fetching scratchpad messages, left for future polling/delta parameters.
  */
-export type GetRoomStateMessagesOptions = Record<string, never>
+export type GetScratchpadStateOptions = Record<string, never>
 
 /**
- * Options for fetching a room's raster preview image.
+ * Options for fetching room messages, left for future polling/delta parameters.
+ *
+ * @deprecated since 0.4.0, use {@link GetScratchpadStateOptions}. Removed in 0.5.0.
  */
-export interface GetRoomPreviewOptions {
+export type GetRoomStateMessagesOptions = GetScratchpadStateOptions
+
+/**
+ * Options for fetching a scratchpad's raster preview image.
+ */
+export interface GetScratchpadPreviewOptions {
     /**
      * A standard HTTP Date string (e.g., "Mon, 17 Aug 2026 13:43:50 GMT").
      * If provided, the server will return a 304 Not Modified if the image hasn't changed,
@@ -348,6 +368,13 @@ export interface GetRoomPreviewOptions {
      */
     ifModifiedSince?: string
 }
+
+/**
+ * Options for fetching a room's raster preview image.
+ *
+ * @deprecated since 0.4.0, use {@link GetScratchpadPreviewOptions}. Removed in 0.5.0.
+ */
+export type GetRoomPreviewOptions = GetScratchpadPreviewOptions
 
 /**
  * Options for fetching the site logo image.

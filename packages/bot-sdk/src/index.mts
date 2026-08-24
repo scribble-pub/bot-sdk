@@ -4,8 +4,11 @@ import type {
     GetLogoOptions,
     GetRoomPreviewOptions,
     GetRoomStateMessagesOptions,
+    GetScratchpadPreviewOptions,
+    GetScratchpadStateOptions,
     HookRequest,
     RoomStateResponse,
+    ScratchpadStateResponse,
 } from "@scribble-pub/api"
 import {
     parseHookRequest,
@@ -15,7 +18,7 @@ import {
     verifySignature,
 } from "@scribble-pub/api"
 import { ScribblePubApiError, ScribblePubValidationError } from "./errors.js"
-import { RoomState } from "./state.js"
+import { RoomState, ScratchpadState } from "./state.js"
 
 export type {
     Action,
@@ -25,6 +28,8 @@ export type {
     GetLogoOptions,
     GetRoomPreviewOptions,
     GetRoomStateMessagesOptions,
+    GetScratchpadPreviewOptions,
+    GetScratchpadStateOptions,
     HookRequest,
     HookResponse,
     LegacyAddMessageAction,
@@ -32,6 +37,8 @@ export type {
     RgbaComponents,
     RoomMessage,
     RoomStateResponse,
+    ScratchpadMessage,
+    ScratchpadStateResponse,
     Trigger,
     ValidationError,
 } from "@scribble-pub/api"
@@ -66,9 +73,9 @@ export type BotConfig = {
 }
 
 /**
- * A room preview PNG together with the validator to ask for it again.
+ * A scratchpad preview PNG together with the validator to ask for it again.
  */
-export type RoomPreviewImage = {
+export type ScratchpadPreviewImage = {
     /**
      * The PNG bytes. Decode them with whatever image library your bot already uses.
      */
@@ -76,10 +83,17 @@ export type RoomPreviewImage = {
 
     /**
      * The `Last-Modified` date of this preview, ready to be passed back as
-     * {@link GetRoomPreviewOptions.ifModifiedSince} on the next call.
+     * {@link GetScratchpadPreviewOptions.ifModifiedSince} on the next call.
      */
     lastModified: string | undefined
 }
+
+/**
+ * A room preview PNG together with the validator to ask for it again.
+ *
+ * @deprecated since 0.4.0, use {@link ScratchpadPreviewImage}. Removed in 0.5.0.
+ */
+export type RoomPreviewImage = ScratchpadPreviewImage
 
 /**
  * The site logo PNG together with the validator to ask for it again.
@@ -204,7 +218,7 @@ class ScribblePubBot {
     }
 
     /**
-     * Gets the state of a room as a list of messages that can be used to restore the state.
+     * Gets the state of a room's scratchpad as a list of messages that can be used to restore it.
      *
      * Currently, this only returns the currently visible static snapshot of the room, omitting full animation timelines.
      * For most layers, this means only the first frame is returned.
@@ -217,6 +231,45 @@ class ScribblePubBot {
      *
      * @throws {ScribblePubValidationError} if `room` fails validation.
      * @throws {ScribblePubApiError} if the platform rejects the request.
+     */
+    async getScratchpadStateMessages(
+        room: string,
+        options?: GetScratchpadStateOptions,
+    ): Promise<ScratchpadStateResponse> {
+        this.assertRoom(room)
+        // Reads are served by whichever replica answers.
+        const res = await this.send("get scratchpad messages", () =>
+            this.client.getScratchpadState(this.client.baseUrl, room, options),
+        )
+        await this.assertOk("get scratchpad messages", res)
+
+        return await res.json()
+    }
+
+    /**
+     * Fetches the room's scratchpad state and reduces it into a {@link ScratchpadState}.
+     *
+     * @param room The ID of the room.
+     *
+     * @throws {ScribblePubValidationError} if `room` fails validation.
+     * @throws {ScribblePubApiError} if the platform rejects the request.
+     */
+    async getScratchpadState(room: string): Promise<ScratchpadState> {
+        const response = await this.getScratchpadStateMessages(room)
+        return ScratchpadState.fromMessages(response.messages)
+    }
+
+    /**
+     * Gets the state of a room as a list of messages that can be used to restore the state.
+     *
+     * @param room The ID of the room.
+     * @param options Future optional parameters for fetching messages
+     *
+     * @throws {ScribblePubValidationError} if `room` fails validation.
+     * @throws {ScribblePubApiError} if the platform rejects the request.
+     *
+     * @deprecated since 0.4.0, use {@link ScribblePubBot.getScratchpadStateMessages}.
+     * The single room state endpoint is replaced by per-app endpoints and is removed in 0.5.0.
      */
     async getRoomStateMessages(
         room: string,
@@ -239,6 +292,9 @@ class ScribblePubBot {
      *
      * @throws {ScribblePubValidationError} if `room` fails validation.
      * @throws {ScribblePubApiError} if the platform rejects the request.
+     *
+     * @deprecated since 0.4.0, use {@link ScribblePubBot.getScratchpadState}, which returns the
+     * `ScratchpadState` directly instead of wrapping it in a room-wide state. Removed in 0.5.0.
      */
     async getRoomState(room: string): Promise<RoomState> {
         const response = await this.getRoomStateMessages(room)
@@ -246,7 +302,7 @@ class ScribblePubBot {
     }
 
     /**
-     * Fetches a low-res (600x420) raster preview of the room.
+     * Fetches a low-res (600x420) raster preview of the room's scratchpad.
      *
      * Keep the returned `lastModified` and pass it back as `ifModifiedSince` on the next call
      * to skip re-downloading a preview if nobody has changed it since.
@@ -257,6 +313,41 @@ class ScribblePubBot {
      *
      * @throws {ScribblePubValidationError} if `room` fails validation.
      * @throws {ScribblePubApiError} if the platform rejects the request.
+     */
+    async getScratchpadPreviewImage(
+        room: string,
+        options?: GetScratchpadPreviewOptions,
+    ): Promise<ScratchpadPreviewImage | null> {
+        this.assertRoom(room)
+
+        // Replicas can serve reads. No endpoint caching needed.
+        const res = await this.send("get scratchpad preview", () =>
+            this.client.getScratchpadPreview(this.client.baseUrl, room, options),
+        )
+
+        if (res.status === 304) {
+            return null
+        }
+        await this.assertOk("get scratchpad preview", res)
+
+        return {
+            image: await res.arrayBuffer(),
+            lastModified: res.headers.get("last-modified") ?? undefined,
+        }
+    }
+
+    /**
+     * Fetches a low-res (600x420) raster preview of the room.
+     *
+     * @param room The ID of the room.
+     * @param options Optional parameters (e.g., { ifModifiedSince: "Mon, 17 Aug 2026 13:43:50 GMT" }).
+     * @returns The PNG image and its `Last-Modified` date, or null if it was not modified (304).
+     *
+     * @throws {ScribblePubValidationError} if `room` fails validation.
+     * @throws {ScribblePubApiError} if the platform rejects the request.
+     *
+     * @deprecated since 0.4.0, use {@link ScribblePubBot.getScratchpadPreviewImage}.
+     * The preview renders the scratchpad, so it moved under the scratchpad app. Removed in 0.5.0.
      */
     async getRoomPreviewImage(
         room: string,

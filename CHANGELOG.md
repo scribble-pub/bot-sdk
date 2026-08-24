@@ -9,6 +9,69 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 Because this package is also the reference implementation of the Bot API,
 each release provides API changes as well to help developing custom clients.
 
+## [0.4.0] - Unreleased
+
+> [!NOTE]
+> Preliminary notes for a release that is still in progress. Everything here may still change.
+
+**Room reads are now per-app.** The single `GET /api/v0/room/{room}/state` endpoint is replaced by
+individual endpoints for scratchpad and (later) chat. Internally, the apps barely share anything,
+so having a single endpoint can create an illusion of having a single, strictly synchronized, room state, which is not true.
+
+### Server API
+
+#### Breaking
+
+No breaking changes.
+
+#### Deprecated
+
+- `GET /api/v0/room/{room}/state` is replaced by `GET /api/v0/room/{room}/scratchpad/state`.
+- `GET /api/v0/room/{room}/preview` is replaced by `GET /api/v0/room/{room}/scratchpad/preview`.
+
+  The endpoint response doesn't change.
+  
+  **The old paths keep being served until 0.5.0**.
+
+#### New
+
+- `GET /api/v0/room/{room}/scratchpad/state` — the scratchpad state as the `sp.*` events that (re)build it.
+  The same body as the endpoint it replaces.
+- `GET /api/v0/room/{room}/scratchpad/preview` — the scratchpad canvas as a PNG at a 0.6px scale,
+  with the same `Last-Modified` / `If-Modified-Since` handling as before.
+
+### SDK
+
+#### Breaking
+
+No breaking changes.
+
+#### Deprecated
+
+- `bot.getRoomStateMessages(room, options?)` > `bot.getScratchpadStateMessages(room, options?)`.
+- `bot.getRoomState(room)` > `bot.getScratchpadState(room)`,
+  which returns a `ScratchpadState` rather than a `RoomState` wrapping it, so the `state.scratchpad.` prefix is gone.
+- `bot.getRoomPreviewImage(room, options?)` > `bot.getScratchpadPreviewImage(room, options?)`.
+- `RoomStateResponse` > `ScratchpadStateResponse`, `GetRoomStateMessagesOptions` > `GetScratchpadStateOptions`,
+  `GetRoomPreviewOptions` > `GetScratchpadPreviewOptions`, `RoomPreviewImage` > `ScratchpadPreviewImage`.
+- `ScribblePubClient.getRoomState` > `ScribblePubClient.getScratchpadState`,
+  `ScribblePubClient.getRoomPreview` > `ScribblePubClient.getScratchpadPreview`.
+
+#### Added
+
+- `bot.getScratchpadStateMessages(room, options?)` — fetches the scratchpad state as the raw
+  `ScratchpadMessage` list.
+- `bot.getScratchpadState(room)` — the same, reduced into a `ScratchpadState`. Reducing a message
+  list you already have is `ScratchpadState.fromMessages(messages)`.
+- `bot.getScratchpadPreviewImage(room, options?)` — returns a `ScratchpadPreviewImage`,
+  `{ image, lastModified }`, or `null` when the preview was not modified.
+- `ScratchpadStateResponse`, `GetScratchpadStateOptions`, and `GetScratchpadPreviewOptions`.
+
+#### Notes
+
+- `RoomState` stays and is not deprecated. It contains one substate per app and is the convenient way
+  to keep a whole room as a single value.
+
 ## [0.3.0] - 2026-08-20
 
 **Package split**: The package is split into two: `@scribble-pub/api` and `@scribble-pub/bot-sdk`.
