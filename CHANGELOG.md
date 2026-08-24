@@ -26,12 +26,13 @@ No breaking changes.
 
 #### Deprecated
 
+- The trigger discriminant is renamed from `trigger` to `type` (e.g. `trigger.type` instead of `trigger.trigger`) to match `Action.type` and `sp.*` messages.
+  - The parser currently accepts and populates both fields, so existing bots remain unaffected.
+  - **The old `trigger.trigger` spelling will be removed before 1.0.**
 - `GET /api/v0/room/{room}/state` is replaced by `GET /api/v0/room/{room}/scratchpad/state`.
 - `GET /api/v0/room/{room}/preview` is replaced by `GET /api/v0/room/{room}/scratchpad/preview`.
-
-  The endpoint response doesn't change.
-  
-  **The old paths keep being served until 0.5.0**.
+  - The endpoint responses remain unchanged.
+  - **The old paths will keep working until 0.5.0.**
 
 #### New
 
@@ -44,7 +45,12 @@ No breaking changes.
 
 #### Breaking
 
-No breaking changes.
+- **`Trigger` types are refactored for strict typing and better separation.**
+  - Common base fields (`type`, `room`, `timestamp`, `directUrl`) remain on `TriggerBase`.
+  - Message-specific fields (`text`, `username`) are moved to `ChatTriggerBase`.
+  - `Trigger` is now a strict union of supported types. Switching on `trigger.type` exhaustively makes the `default` branch `never`.
+- **Event handlers receive the `trigger` directly** instead of the full request object (e.g., `bot.on("hook", (trigger) => ...)`).
+- **Unsupported trigger types are safely dropped.** They are acknowledged with a `200` response and will only trigger the `"unsupported"` handler, if registered. Upgrading the SDK is required to support new trigger types.
 
 #### Deprecated
 
@@ -59,18 +65,29 @@ No breaking changes.
 
 #### Added
 
-- `bot.getScratchpadStateMessages(room, options?)` — fetches the scratchpad state as the raw
-  `ScratchpadMessage` list.
-- `bot.getScratchpadState(room)` — the same, reduced into a `ScratchpadState`. Reducing a message
-  list you already have is `ScratchpadState.fromMessages(messages)`.
-- `bot.getScratchpadPreviewImage(room, options?)` — returns a `ScratchpadPreviewImage`,
-  `{ image, lastModified }`, or `null` when the preview was not modified.
-- `ScratchpadStateResponse`, `GetScratchpadStateOptions`, and `GetScratchpadPreviewOptions`.
+- **New methods for Scratchpad data**:
+  - `bot.getScratchpadStateMessages()` fetches the raw `ScratchpadMessage` list.
+  - `bot.getScratchpadState()` fetches the reduced `ScratchpadState`. (You can also reduce an existing list with `ScratchpadState.fromMessages()`).
+  - `bot.getScratchpadPreviewImage()` returns a `{ image, lastModified }` object, or `null` if unmodified.
+- **Specific event handlers**: You can now listen for specific trigger types in `bot.on` (e.g. `bot.on("chat.mention", ...)`).
+  - The handler receives a strictly typed `trigger`.
+  - `"hook"` now acts as a catch-all for unclaimed triggers.
+  - At most one handler runs per hook. Unclaimed hooks are safely acknowledged with `200`. A `501` error now strictly means *no* handlers are registered on the bot.
+- **New exported types**: `Handler`, `SupportedTriggerType` (and `SUPPORTED_TRIGGER_TYPES`), and the new Scratchpad options and response types.
+- **`bot.on("unsupported")` event**: Allows handling trigger types unknown to this SDK version. Receives the base fields (`TriggerBase`) and can return actions.
+- **`Trigger.type`**: Renamed from `Trigger.trigger` (which remains populated for backwards compatibility, but will be removed at some point).
+
+#### Fixed
+
+- **Parsers now fully support forward compatibility:**
+  - Unsupported trigger types no longer throw `400` errors. They safely parse into their base fields and are acknowledged.
+  - Zod schemas are now `loose` rather than stripping unknown fields. This fixes a bug where payload-specific fields (like `text`) were incorrectly stripped before reaching their specific schema.
+- **Improved validation errors**: Malformed payloads for supported triggers (e.g. missing `text`) now correctly report the missing field instead of silently falling back as unsupported.
 
 #### Notes
 
-- `RoomState` stays and is not deprecated. It contains one substate per app and is the convenient way
-  to keep a whole room as a single value.
+- **Per-hook metadata belongs on the trigger.** Handlers only receive the `trigger` object. Fields added alongside `trigger` in the request body will be ignored by bots. Use `TriggerBase` for delivery metadata.
+- **`RoomState` is not deprecated.** It remains for a convenient way to hold the entire room state in a single value.
 
 ## [0.3.0] - 2026-08-20
 

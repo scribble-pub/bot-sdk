@@ -1,12 +1,25 @@
 /**
- * The specific event that caused this webhook to fire.
- * Currently, this only fires when a user explicitly tags your bot (e.g., "@HelloBot").
+ * The trigger types this package version supports.
  */
-export type Trigger = {
+export const SUPPORTED_TRIGGER_TYPES = ["chat.mention"] as const
+
+export type SupportedTriggerType = (typeof SUPPORTED_TRIGGER_TYPES)[number]
+
+/**
+ * A base for events that caused a webhook to fire.
+ */
+export type TriggerBase = {
     /**
      * The type of trigger that caused this hook to fire.
      */
-    trigger: "chat.mention"
+    type: string
+
+    /**
+     * The legacy spelling of {@link TriggerBase.type}.
+     *
+     * @deprecated Use `type`. Support for this spelling will be removed before 1.0.
+     */
+    trigger: string
 
     /**
      * The room where the event occurred.
@@ -19,16 +32,6 @@ export type Trigger = {
     timestamp: number
 
     /**
-     * The text that triggered the hook. Includes the mention itself.
-     */
-    text: string
-
-    /**
-     * The username of the user who triggered the hook.
-     */
-    username: string
-
-    /**
      * The base API URL for this room's host instance (e.g., "https://eu.scribble.pub").
      * Use it for a faster way to reach the target room, avoiding intermediate redirects.
      */
@@ -36,11 +39,59 @@ export type Trigger = {
 }
 
 /**
- * The exact JSON payload sent by a scribble.pub server when an event occurs in a room.
+ * A base for all chat events that trigger a webhook.
+ */
+export type ChatTriggerBase = TriggerBase & {
+    /**
+     * The username of the user who triggered the hook.
+     */
+    username: string
+
+    /**
+     * The text that triggered the hook. May include the mention if it's `chat.mention`.
+     */
+    text: string
+}
+
+/**
+ * A user explicitly tagged your bot (e.g., "@HelloBot").
+ *
+ * {@link ChatTriggerBase.text} includes the mention itself.
+ */
+export type ChatMentionTrigger = ChatTriggerBase & {
+    type: "chat.mention"
+
+    /** @deprecated Use `type`. Removed before 1.0. */
+    trigger: "chat.mention"
+}
+
+/**
+ * A specific event that caused this webhook to fire, supported by this package version.
+ */
+export type Trigger = ChatMentionTrigger
+
+/**
+ * A trigger object as it comes from the platform.
+ * A superset of `Trigger` that includes placeholders
+ * for new trigger types that may not be supported by this version of the SDK.
+ * Avoids 400 responses from the bot triggered by Zod.
+ */
+export type IncomingTrigger =
+    | Trigger
+    | (TriggerBase & {
+          // `string & {}` keeps autocomplete for the supported literals while still accepting anything else.
+          type: string & {}
+
+          /** @deprecated Use `type`. Removed before 1.0. */
+          trigger: string & {}
+      })
+
+/**
+ * The JSON payload sent by a scribble.pub server when a hook-emitting event occurs in a room.
  * This is what your bot's HTTP server receives in the request body.
  */
 export type HookRequest = {
-    trigger: Trigger
+    trigger: IncomingTrigger
 }
 
 /**

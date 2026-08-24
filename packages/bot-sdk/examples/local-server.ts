@@ -15,14 +15,20 @@ const bot = new ScribblePubBot({
     baseUrl: process.env.API_BASE_URL,
 })
 
-bot.on("hook", (req) => {
-    console.log(`[Bot] Received event: ${req}`)
+bot.on("chat.mention", (trigger) => {
+    console.log(`[Bot] Mentioned by ${trigger.username}`)
     return [
         {
             type: "chat.addMessage",
-            text: `Hi ${req.trigger.username}! You wrote '${req.trigger.text}' to me.`,
+            text: `Hi ${trigger.username}! You wrote '${trigger.text}' to me.`,
         },
     ]
+})
+
+// Anything the handler above didn't take. Trigger types this SDK version doesn't support
+// are acknowledged by the SDK and never get here.
+bot.on("hook", (trigger) => {
+    console.log(`[Bot] Unhandled trigger: ${trigger.type}`)
 })
 
 const app = new Hono()

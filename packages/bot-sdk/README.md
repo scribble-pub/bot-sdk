@@ -19,19 +19,65 @@ import ScribblePubBot from "@scribble-pub/bot-sdk"
 // 1. Initialize the bot with your webhook secret
 const bot = new ScribblePubBot({ token: process.env.BOT_TOKEN })
 
-// 2. Define your event handler
-bot.on("hook", (req) => {
-    console.log(`User triggered bot: ${req.trigger.text}`)
+// 2. Define a handler per trigger type you care about
+bot.on("chat.mention", (trigger) => {
+    console.log(`${trigger.username} tagged the bot: ${trigger.text}`)
 
     // Return an array of actions for the platform to execute in the room
     return [
         {
             type: "chat.addMessage",
-            text: `You said: ${req.trigger.text}`,
+            text: `You said: ${trigger.text}`,
         },
     ]
 })
 ```
+
+### Trigger types
+
+A hook goes to the handler registered for its trigger type, already narrowed to it:
+
+| Trigger | Fires when | Fields |
+| --- | --- | --- |
+| `chat.mention` | A user tags your bot (e.g. `@HelloBot`) | `username`, and `text`, which includes the mention itself |
+
+Every trigger also contains `type`, `room`, `timestamp`, and `directUrl`, which describe the hook
+itself rather than what happened.
+
+> [!NOTE]
+> The discriminant used to be spelled `trigger.trigger`. It is `trigger.type` now, matching `Action.type`.
+> Both spellings are filled in with the same value; `trigger` is deprecated and goes away before 1.0.
+
+`bot.on("hook", …)` catches any trigger without a defined named handler. It receives `Trigger`,
+which lists every type the SDK delivers, so a `switch` over `trigger.type` covers all of them:
+
+```typescript
+bot.on("hook", (trigger) => {
+    switch (trigger.type) {
+        case "chat.mention":
+            console.log(trigger.text)
+            break
+    }
+})
+```
+
+Exactly one handler runs per hook — the named one if there is one, `"hook"` otherwise — and a hook
+that matches neither is acknowledged with no actions.
+
+**Trigger types this SDK version doesn't support are safely excluded from standard handlers**,
+so `Trigger` never holds a type the SDK can't describe. To properly support a new trigger type, you must upgrade the SDK.
+
+However, you can use `bot.on("unsupported", …)` to detect when this happens.
+It fires exclusively for unknown triggers and receives the base fields — `type`, `room`, `timestamp`, `directUrl` — so a bot can log that it is behind instead of discarding them silently:
+
+```typescript
+bot.on("unsupported", (trigger) => {
+    logger.warn(`Unsupported trigger type ${trigger.type} in ${trigger.room}. Please update the SDK.`)
+})
+```
+
+It may return actions like any other handler. The base fields are all it gets. To support the new trigger type,
+upgrade to the SDK version that supports it.
 
 **The hook calls have a 10-second timeout**. In complex cases requiring additional work, you should send the result as a separate request instead: see [Sending actions outside a hook](#sending-actions-outside-a-hook).
 
@@ -107,9 +153,9 @@ await bot.sendActions("main", [{ type: "chat.addMessage", text: "Good morning!" 
 If your bot requires longer work such as media processing or LLM querying, you must give the hook response as soon as possible. When the work is done, send the result by using `sendActions`, which makes a separate request to the room directly.
 
 ```typescript
-bot.on("hook", (req) => {
+bot.on("chat.mention", (trigger) => {
     // Answered with an empty action list; the render publishes on its own.
-    void renderTheThing(req).then((actions) => bot.sendActions(req.trigger.room, actions))
+    void renderTheThing(trigger).then((actions) => bot.sendActions(trigger.room, actions))
 })
 ```
 
@@ -121,10 +167,10 @@ and `404` when the room doesn't exist or is offline:
 
 ```typescript
 try {
-    await bot.sendActions(req.trigger.room, actions)
+    await bot.sendActions(trigger.room, actions)
 } catch (err) {
     if (err instanceof ScribblePubApiError && err.status === 403) {
-        console.warn(`Bot can't send messages in ${req.trigger.room}`)
+        console.warn(`Bot can't send messages in ${trigger.room}`)
         return
     }
     throw err
@@ -165,23 +211,24 @@ const state = await bot.getScratchpadState("main")
 
 The state is read-only from the outside: local fields are exposed as `ReadonlyMap`s and readonly arrays.
 
-### Why per-app, and not per-room
+### Why per-app, and not per-room?
 
-The scratchpad and the chat are separate apps that share only a room name. They take separate locks, keep separate event counters, and expire on completely different schedules: clearing the canvas resets the scratchpad to an empty session (the old one is kept as a historical snapshot) and leaves the chat untouched, while chat messages disappear on their own after two days.
+The scratchpad and chat are entirely separate apps that only share a room name. Fetching them separately is necessary because:
+- **Different lifecycles**: Clearing the canvas resets the scratchpad (archiving the old session) but leaves the chat untouched. Chat messages expire on their own after two days.
+- **Independent state**: They maintain separate event counters and locks. A combined fetch would artificially stitch two independent snapshots together.
+- **Efficiency**: Fetching per-app costs nothing. Most bots only need one app, and those needing both can fetch in parallel.
 
-So a combined fetch could never hand you a single consistent room snapshot — it would stitch two independently taken ones — and it would force one cursor and one `ETag` to stand for two things that go stale for different reasons. Fetching each app on its own costs a bot nothing: almost no bot needs both, and the ones that do can ask in parallel.
-
-If you would rather carry a whole room as a single value — say your bot tracks several rooms at once — `RoomState` holds one substate per app and gives you `state.scratchpad`:
+If you need to track the whole room as a single value (e.g. for multi-room tracking), use `RoomState`, which holds one substate per app:
 
 ```typescript
 const room = RoomState.fromMessages(response.messages)
 console.log(room.scratchpad.layers.size)
 ```
 
-It is a convenience, not a requirement: a bot that only follows the drawing surface can use `ScratchpadState` directly.
+This is purely for convenience. Bots that only care about drawing can use `ScratchpadState` directly.
 
 > [!NOTE]
-> Messages from different apps are never ordered against each other. The scratchpad can post to the chat asynchronously, so a chat message announcing a canvas clear may arrive before or after the `sp.sessionMeta` that performs it. Never correlate the two streams by arrival order or timestamp — take canvas facts from the scratchpad stream, which carries them in typed form.
+> **No cross-app ordering**: Messages from different apps are never strictly ordered. A chat message announcing a canvas clear may arrive before or after the actual `sp.sessionMeta` event. Never correlate the two streams by arrival order or timestamp. Always read canvas facts from the typed scratchpad stream.
 
 ### State entities vs. messages
 

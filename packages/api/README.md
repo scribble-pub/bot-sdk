@@ -35,9 +35,15 @@ To guarantee that incoming requests genuinely came from scribble.pub and haven't
 You can use the `verifySignature(payload: string, signatureHeader: string, secretToken: string): Promise<boolean>` helper exported by this package to perform a constant-time cryptographic validation of the payload.
 
 ## Forward Compatibility (Important)
-As the platform evolves, new fields and message types will be added to the JSON payloads. 
-**Your bot must ignore any unrecognized fields or message types.** 
-Do not use strict JSON validation (e.g., `zod.strict()`) that fails on unknown keys, or your bot will crash when new features are released.
+
+As the platform evolves, new fields, message types, and trigger types will be added to payloads.
+**Your bot must ignore unrecognized data.** Avoid strict JSON validation (e.g. `zod.strict()`), otherwise your bot will crash when new features are released.
+
+Our exported parsers follow this rule to stay usable against newer platform versions:
+
+- **Unsupported triggers still parse:** Unknown trigger types validate successfully by extracting their base fields to avoid returning false `400` errors. (The SDK safely drops these).
+- **Graceful deprecations:** The discriminant is `type`, but payloads using the deprecated `trigger` spelling are still accepted and populated on both keys, until it is removed before 1.0.
+- **Loose validation:** Schemas accept unknown fields instead of rejecting or stripping them. However, you should not rely on undeclared fields. Upgrade this package instead to use them safely.
 
 > [!WARNING]
 > According to current plans, before 1.0, the `line.floats` object type will remain only for simple points and lines provided by bots. Complex user-drawn lines will be sent in a more efficient, high-precision format, similar to the one that is used for UI-server communication.

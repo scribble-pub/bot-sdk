@@ -3,20 +3,74 @@ import type {
     Action,
     HookRequest,
     HookResponse,
+    IncomingTrigger,
     RegisterWebhookPayload,
-    Trigger,
+    SupportedTriggerType,
 } from "./schemas.js"
 
-const TriggerSchema: z.ZodType<Trigger> = z.object({
-    trigger: z.literal("chat.mention"),
+/**
+ * An adapter so that both `type` and `trigger` exist, for backwards compatibility.
+ * `trigger` is deprecated and removed before 1.0.
+ */
+function aliasTriggerType(value: unknown): unknown {
+    if (typeof value !== "object" || value === null) {
+        return value
+    }
+
+    const raw = value as Record<string, unknown>
+    const type = typeof raw.type === "string" ? raw.type : raw.trigger
+
+    return typeof type === "string" ? { ...raw, type, trigger: type } : value
+}
+
+const baseFields = {
     room: z.string(),
     timestamp: z.number(),
-    text: z.string(),
-    username: z.string(),
     directUrl: z.string(),
+}
+
+const chatFields = {
+    ...baseFields,
+    username: z.string(),
+    text: z.string(),
+}
+
+const ChatMentionTriggerSchema = z.looseObject({
+    ...chatFields,
+    type: z.literal("chat.mention"),
 })
 
-const HookRequestSchema: z.ZodType<HookRequest> = z.object({
+const triggerSchemasByType: Record<SupportedTriggerType, z.ZodType> = {
+    "chat.mention": ChatMentionTriggerSchema,
+}
+
+// Parse the common base fields first to avoid throwing 400 errors for unsupported trigger types.
+// We use a loose object so fields aren't stripped before they can be checked by specific schemas.
+// We dispatch manually instead of using `z.union` to provide more accurate error messages.
+const TriggerSchema: z.ZodType<IncomingTrigger> = z
+    .preprocess(
+        aliasTriggerType,
+        z.looseObject({
+            ...baseFields,
+            type: z.string(),
+            trigger: z.string(),
+        }),
+    )
+    .superRefine((trigger, ctx) => {
+        const schema = triggerSchemasByType[trigger.type as SupportedTriggerType]
+        if (!schema) {
+            return
+        }
+
+        const result = schema.safeParse(trigger)
+        if (!result.success) {
+            for (const issue of result.error.issues) {
+                ctx.addIssue({ code: "custom", path: issue.path, message: issue.message })
+            }
+        }
+    })
+
+const HookRequestSchema: z.ZodType<HookRequest> = z.looseObject({
     trigger: TriggerSchema,
 })
 
@@ -25,12 +79,12 @@ const RegisterWebhookPayloadSchema: z.ZodType<RegisterWebhookPayload> = z.object
 })
 
 // "addMessage" is the deprecated spelling of "chat.addMessage", accepted until it is removed before 1.0.
-const ActionSchema: z.ZodType<Action> = z.object({
+const ActionSchema: z.ZodType<Action> = z.looseObject({
     type: z.literal(["chat.addMessage", "addMessage"]),
     text: z.string(),
 })
 
-const HookResponseSchema: z.ZodType<HookResponse> = z.object({
+const HookResponseSchema: z.ZodType<HookResponse> = z.looseObject({
     actions: z.array(ActionSchema),
 })
 

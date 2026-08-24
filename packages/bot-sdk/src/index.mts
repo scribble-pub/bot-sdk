@@ -1,20 +1,25 @@
 import type {
     Action,
+    ChatMentionTrigger,
     ErrorResponse,
     GetLogoOptions,
     GetRoomPreviewOptions,
     GetRoomStateMessagesOptions,
     GetScratchpadPreviewOptions,
     GetScratchpadStateOptions,
-    HookRequest,
+    IncomingTrigger,
     RoomStateResponse,
     ScratchpadStateResponse,
+    SupportedTriggerType,
+    Trigger,
+    TriggerBase,
 } from "@scribble-pub/api"
 import {
     parseHookRequest,
     parseHookResponse,
     parseRegisterWebhookPayload,
     ScribblePubClient,
+    SUPPORTED_TRIGGER_TYPES,
     verifySignature,
 } from "@scribble-pub/api"
 import { ScribblePubApiError, ScribblePubValidationError } from "./errors.js"
@@ -24,6 +29,8 @@ export type {
     Action,
     AddMessageAction,
     AddMessagePayload,
+    ChatMentionTrigger,
+    ChatTriggerBase,
     ErrorResponse,
     GetLogoOptions,
     GetRoomPreviewOptions,
@@ -32,6 +39,7 @@ export type {
     GetScratchpadStateOptions,
     HookRequest,
     HookResponse,
+    IncomingTrigger,
     LegacyAddMessageAction,
     RegisterWebhookPayload,
     RgbaComponents,
@@ -39,10 +47,12 @@ export type {
     RoomStateResponse,
     ScratchpadMessage,
     ScratchpadStateResponse,
+    SupportedTriggerType,
     Trigger,
+    TriggerBase,
     ValidationError,
 } from "@scribble-pub/api"
-export { rgbaToComponents, rgbaToHex } from "@scribble-pub/api"
+export { rgbaToComponents, rgbaToHex, SUPPORTED_TRIGGER_TYPES } from "@scribble-pub/api"
 export * from "./state.js"
 export { ScribblePubApiError, ScribblePubValidationError }
 
@@ -121,8 +131,33 @@ export type LogoImage = {
  */
 export type HookResult = Action[] | undefined
 
+/**
+ * A handler for one event, given the trigger that fired it.
+ */
+export type Handler<T> = (trigger: T) => HookResult | Promise<HookResult>
+
+/**
+ * The events {@link ScribblePubBot.on} accepts.
+ *
+ * - Specific trigger types (e.g., `"chat.mention"`) receive a strictly typed `trigger`.
+ * - `"hook"` is the catch-all for triggers without a specific handler, receiving a `Trigger` union.
+ * - `"unsupported"` receives only the base fields. It fires for triggers unknown to this SDK version, which are otherwise dropped silently.
+ */
 type EventMap = {
-    hook: (request: HookRequest) => HookResult | Promise<HookResult>
+    hook: Handler<Trigger>
+    unsupported: Handler<TriggerBase>
+    "chat.mention": Handler<ChatMentionTrigger>
+}
+
+/**
+ * The trigger types {@link ScribblePubBot.on} can dispatch by name, i.e. everything but `"hook"`.
+ */
+type TriggerEvent = Extract<keyof EventMap, SupportedTriggerType>
+
+const supportedTriggerTypes: ReadonlySet<string> = new Set(SUPPORTED_TRIGGER_TYPES)
+
+function isSupportedTrigger(trigger: IncomingTrigger): trigger is Trigger {
+    return supportedTriggerTypes.has(trigger.type)
 }
 
 class ScribblePubBot {
@@ -153,6 +188,16 @@ class ScribblePubBot {
         }
     }
 
+    /**
+     * Registers an event handler, replacing any existing handler for that event.
+     *
+     * - Specific trigger events (e.g., `"chat.mention"`) receive a strictly typed `trigger`.
+     * - `"hook"` is the catch-all for triggers without a specific handler.
+     * - `"unsupported"` captures triggers unknown to this SDK version.
+     *
+     * At most one handler runs per hook: the named one (if registered), otherwise `"hook"`.
+     * Unclaimed hooks are safely acknowledged with no actions.
+     */
     on<K extends keyof EventMap>(event: K, handler: EventMap[K]): this {
         this.handlers[event] = handler
         return this
@@ -496,14 +541,26 @@ class ScribblePubBot {
             parsedRequest.data.trigger.directUrl,
         )
 
-        const handler = this.handlers.hook
-        if (!handler) {
+        if (Object.keys(this.handlers).length === 0) {
             return Response.json({ error: "no handler registered" }, { status: 501 })
         }
 
-        const actions = (await handler(parsedRequest.data)) ?? []
+        const { trigger } = parsedRequest.data
 
-        const parsedResponse = parseHookResponse(actions)
+        let result: HookResult
+
+        if (isSupportedTrigger(trigger)) {
+            const named = this.handlers[trigger.type as TriggerEvent]
+
+            // Unclaimed hooks are safely acknowledged rather than throwing an error.
+            const handler = (named ?? this.handlers.hook) as Handler<typeof trigger> | undefined
+            result = await handler?.(trigger)
+        } else {
+            // Unknown triggers are safely dropped unless an "unsupported" handler is registered.
+            result = await this.handlers.unsupported?.(trigger)
+        }
+
+        const parsedResponse = parseHookResponse(result ?? [])
         if (!parsedResponse.success) {
             return Response.json(
                 { error: "handler returned invalid actions", details: parsedResponse.errors },

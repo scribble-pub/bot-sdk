@@ -2,7 +2,7 @@ import { createServer } from "node:http"
 import type { AddressInfo } from "node:net"
 import { Hono } from "hono"
 import { afterEach, describe, expect, it, vi } from "vitest"
-import type { Action, HookRequest, HookResponse, Trigger } from "../src/index.mjs"
+import type { Action, ChatMentionTrigger, HookResponse } from "../src/index.mjs"
 import ScribblePubBot, {
     ScribblePubApiError,
     ScribblePubValidationError,
@@ -12,10 +12,12 @@ import ScribblePubBot, {
 const TOKEN = "test-secret-token"
 const AP = "https://ap.scribble.pub"
 
-function hookPayload(overrides: Partial<Trigger> = {}): HookRequest {
+type MentionPayload = { trigger: Omit<ChatMentionTrigger, "trigger"> }
+
+function hookPayload(overrides: Partial<ChatMentionTrigger> = {}): MentionPayload {
     return {
         trigger: {
-            trigger: "chat.mention",
+            type: "chat.mention",
             text: "@TestBot hello",
             room: "main",
             timestamp: 1779999999999,
@@ -47,38 +49,32 @@ function appWithBot(bot: ScribblePubBot) {
     return app
 }
 
+/** Signs `payload` and posts it to a bot's webhook, the way the platform does. */
+async function postHook(bot: ScribblePubBot, payload: string) {
+    return appWithBot(bot).request("/webhook", {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            "X-Scribble-Pub-Signature": await sign(TOKEN, payload),
+        },
+        body: payload,
+    })
+}
+
 describe("scribble.pub bot with Hono", () => {
     it("handles webhook correctly with Hono", async () => {
         const bot = new ScribblePubBot({ token: TOKEN })
 
-        bot.on("hook", (req) => {
+        bot.on("hook", (trigger) => {
             return [
                 {
                     type: "chat.addMessage",
-                    text: `Responding to ${req.trigger.username} who wrote '${req.trigger.text}'`,
+                    text: `Responding to a ${trigger.type} in ${trigger.room}`,
                 },
             ]
         })
 
-        const payload = JSON.stringify({
-            trigger: {
-                trigger: "chat.mention",
-                text: "@TestBot hello",
-                room: "main",
-                timestamp: 1779999999999,
-                username: "TheBestArtist",
-                directUrl: "https://eu.scribble.pub",
-            },
-        } as HookRequest)
-
-        const res = await appWithBot(bot).request("/webhook", {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                "X-Scribble-Pub-Signature": await sign(TOKEN, payload),
-            },
-            body: payload,
-        })
+        const res = await postHook(bot, JSON.stringify(hookPayload()))
 
         expect(res.status).toBe(200)
 
@@ -87,7 +83,7 @@ describe("scribble.pub bot with Hono", () => {
             actions: [
                 {
                     type: "chat.addMessage",
-                    text: "Responding to TheBestArtist who wrote '@TestBot hello'",
+                    text: "Responding to a chat.mention in main",
                 },
             ],
         } as HookResponse)
@@ -98,25 +94,7 @@ describe("scribble.pub bot with Hono", () => {
 
         bot.on("hook", () => undefined)
 
-        const payload = JSON.stringify({
-            trigger: {
-                trigger: "chat.mention",
-                text: "@TestBot hello",
-                room: "main",
-                timestamp: 1779999999999,
-                username: "TheBestArtist",
-                directUrl: "https://eu.scribble.pub",
-            },
-        } as HookRequest)
-
-        const res = await appWithBot(bot).request("/webhook", {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                "X-Scribble-Pub-Signature": await sign(TOKEN, payload),
-            },
-            body: payload,
-        })
+        const res = await postHook(bot, JSON.stringify(hookPayload()))
 
         expect(res.status).toBe(200)
         expect(await res.json()).toEqual({ actions: [] } as HookResponse)
@@ -125,30 +103,12 @@ describe("scribble.pub bot with Hono", () => {
     it("awaits an async handler before answering", async () => {
         const bot = new ScribblePubBot({ token: TOKEN })
 
-        bot.on("hook", async (req) => {
+        bot.on("chat.mention", async (trigger) => {
             await new Promise((resolve) => setTimeout(resolve, 5))
-            return [{ type: "chat.addMessage", text: `Hi, ${req.trigger.username}!` }]
+            return [{ type: "chat.addMessage", text: `Hi, ${trigger.username}!` }]
         })
 
-        const payload = JSON.stringify({
-            trigger: {
-                trigger: "chat.mention",
-                text: "@TestBot hello",
-                room: "main",
-                timestamp: 1779999999999,
-                username: "TheBestArtist",
-                directUrl: "https://eu.scribble.pub",
-            },
-        } as HookRequest)
-
-        const res = await appWithBot(bot).request("/webhook", {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                "X-Scribble-Pub-Signature": await sign(TOKEN, payload),
-            },
-            body: payload,
-        })
+        const res = await postHook(bot, JSON.stringify(hookPayload()))
 
         expect(res.status).toBe(200)
         expect(await res.json()).toEqual({
@@ -175,16 +135,7 @@ describe("scribble.pub bot with Hono", () => {
         const bot = new ScribblePubBot({ token: TOKEN })
         bot.on("hook", () => [])
 
-        const payload = "{not valid json"
-
-        const res = await appWithBot(bot).request("/webhook", {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                "X-Scribble-Pub-Signature": await sign(TOKEN, payload),
-            },
-            body: payload,
-        })
+        const res = await postHook(bot, "{not valid json")
 
         expect(res.status).toBe(400)
     })
@@ -193,16 +144,7 @@ describe("scribble.pub bot with Hono", () => {
         const bot = new ScribblePubBot({ token: TOKEN })
         bot.on("hook", () => [])
 
-        const payload = JSON.stringify({ event: "message" })
-
-        const res = await appWithBot(bot).request("/webhook", {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                "X-Scribble-Pub-Signature": await sign(TOKEN, payload),
-            },
-            body: payload,
-        })
+        const res = await postHook(bot, JSON.stringify({ event: "message" }))
 
         expect(res.status).toBe(400)
 
@@ -213,28 +155,126 @@ describe("scribble.pub bot with Hono", () => {
         )
     })
 
+    it('offers an unsupported trigger to the "unsupported" handler, base fields and all', async () => {
+        const bot = new ScribblePubBot({ token: TOKEN })
+        const seen = vi.fn()
+
+        bot.on("chat.mention", () => [{ type: "chat.addMessage", text: "should not run" }])
+        bot.on("unsupported", (trigger) => {
+            seen(trigger.type, trigger.room)
+            return [{ type: "chat.addMessage", text: `dropped ${trigger.type}` }]
+        })
+
+        const { room, timestamp, directUrl } = hookPayload().trigger
+        const payload = JSON.stringify({
+            trigger: { type: "chat.somethingNew", room, timestamp, directUrl },
+        })
+
+        const res = await postHook(bot, payload)
+
+        expect(res.status).toBe(200)
+        expect(seen).toHaveBeenCalledWith("chat.somethingNew", "main")
+        // Its actions are applied like any other handler's.
+        expect(await res.json()).toEqual({
+            actions: [{ type: "chat.addMessage", text: "dropped chat.somethingNew" }],
+        } as HookResponse)
+    })
+
+    it('does not send a supported trigger to the "unsupported" handler', async () => {
+        const bot = new ScribblePubBot({ token: TOKEN })
+        const unsupported = vi.fn(() => [])
+
+        bot.on("chat.mention", () => [{ type: "chat.addMessage", text: "handled" }])
+        bot.on("unsupported", unsupported)
+
+        const res = await postHook(bot, JSON.stringify(hookPayload()))
+
+        expect(res.status).toBe(200)
+        expect(unsupported).not.toHaveBeenCalled()
+    })
+
+    it("acknowledges a trigger type this SDK version doesn't support without handling it", async () => {
+        const bot = new ScribblePubBot({ token: TOKEN })
+        const seen = vi.fn()
+
+        bot.on("hook", (trigger) => {
+            seen(trigger.type)
+            return []
+        })
+
+        const { room, timestamp, directUrl } = hookPayload().trigger
+        const payload = JSON.stringify({
+            trigger: { type: "chat.somethingNew", room, timestamp, directUrl },
+        })
+
+        const res = await postHook(bot, payload)
+
+        expect(res.status).toBe(200)
+        expect(await res.json()).toEqual({ actions: [] } as HookResponse)
+        expect(seen).not.toHaveBeenCalled()
+    })
+
+    it("passes fields added by newer platform versions through to the handler", async () => {
+        const bot = new ScribblePubBot({ token: TOKEN })
+        const seen = vi.fn()
+
+        bot.on("hook", (trigger) => {
+            seen(trigger)
+            return []
+        })
+
+        const { trigger } = hookPayload()
+        const payload = JSON.stringify({
+            trigger: { ...trigger, threadId: 42 },
+            deliveryId: "abc",
+        })
+
+        const res = await postHook(bot, payload)
+
+        expect(res.status).toBe(200)
+        expect(seen).toHaveBeenCalledWith(expect.objectContaining({ threadId: 42 }))
+    })
+
+    it("prefers a handler registered for the trigger type over the catch-all", async () => {
+        const bot = new ScribblePubBot({ token: TOKEN })
+        const catchAll = vi.fn()
+
+        bot.on("chat.mention", (trigger) => [
+            { type: "chat.addMessage", text: `Hi, ${trigger.username}!` },
+        ])
+        bot.on("hook", () => {
+            catchAll()
+            return []
+        })
+
+        const res = await postHook(bot, JSON.stringify(hookPayload()))
+
+        expect(res.status).toBe(200)
+        expect(await res.json()).toEqual({
+            actions: [{ type: "chat.addMessage", text: "Hi, TheBestArtist!" }],
+        } as HookResponse)
+        expect(catchAll).not.toHaveBeenCalled()
+    })
+
+    it("reports the offending field of a supported trigger that doesn't match its schema", async () => {
+        const bot = new ScribblePubBot({ token: TOKEN })
+        bot.on("hook", () => [])
+
+        const { text, ...rest } = hookPayload().trigger
+        const res = await postHook(bot, JSON.stringify({ trigger: rest }))
+
+        expect(res.status).toBe(400)
+
+        const data = await res.json()
+        expect(data.details).toEqual(
+            expect.arrayContaining([expect.objectContaining({ path: "trigger.text" })]),
+        )
+    })
+
     it("rejects when no handler is registered", async () => {
         const bot = new ScribblePubBot({ token: TOKEN })
 
-        const payload = JSON.stringify({
-            trigger: {
-                trigger: "chat.mention",
-                text: "@TestBot hello",
-                room: "main",
-                timestamp: 1779999999999,
-                username: "TheBestArtist",
-                directUrl: "https://eu.scribble.pub",
-            },
-        } as HookRequest)
-
-        const res = await appWithBot(bot).request("/webhook", {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                "X-Scribble-Pub-Signature": await sign(TOKEN, payload),
-            },
-            body: payload,
-        })
+        const res = await postHook(bot, JSON.stringify(hookPayload()))
 
         expect(res.status).toBe(501)
     })
@@ -244,25 +284,7 @@ describe("scribble.pub bot with Hono", () => {
         // @ts-expect-error intentionally returning a malformed action to test the guardrail
         bot.on("hook", () => [{ type: "chat.addMessage" }])
 
-        const payload = JSON.stringify({
-            trigger: {
-                trigger: "chat.mention",
-                text: "@TestBot hello",
-                room: "main",
-                timestamp: 1779999999999,
-                username: "TheBestArtist",
-                directUrl: "https://eu.scribble.pub",
-            },
-        } as HookRequest)
-
-        const res = await appWithBot(bot).request("/webhook", {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                "X-Scribble-Pub-Signature": await sign(TOKEN, payload),
-            },
-            body: payload,
-        })
+        const res = await postHook(bot, JSON.stringify(hookPayload()))
 
         expect(res.status).toBe(500)
 
@@ -447,14 +469,7 @@ describe("sendActions", () => {
         bot.on("hook", () => undefined)
 
         const payload = JSON.stringify(hookPayload({ room: "Quiet", directUrl: AP }))
-        await appWithBot(bot).request("/webhook", {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                "X-Scribble-Pub-Signature": await sign(TOKEN, payload),
-            },
-            body: payload,
-        })
+        await postHook(bot, payload)
 
         await bot.sendActions("quiet", [...HELLO])
 
@@ -516,7 +531,7 @@ describe("sendActions", () => {
         )
     })
 
-    it("unwraps a JSON error envelope", async () => {
+    it("unwraps a JSON error", async () => {
         stubFetch(Response.json({ error: "Room is not found" }, { status: 404 }))
         const bot = new ScribblePubBot({ token: TOKEN })
 
