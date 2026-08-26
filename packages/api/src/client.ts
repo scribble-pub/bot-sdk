@@ -1,12 +1,9 @@
 import type {
     GetLogoOptions,
-    GetRoomPreviewOptions,
-    GetRoomStateMessagesOptions,
     GetScratchpadPreviewOptions,
     GetScratchpadStateOptions,
     HookResponse,
     RegisterWebhookPayload,
-    RoomStateResponse,
     ScratchpadStateResponse,
 } from "./schemas.js"
 
@@ -85,24 +82,6 @@ export class ScribblePubClient {
     }
 
     /**
-     * Gets the state of a room as a list of messages that can be used to restore the state.
-     *
-     * Calls `GET /api/v0/room/{room}/state`
-     *
-     * @deprecated since 0.4.0, use {@link ScribblePubClient.getScratchpadState}.
-     * The single room state endpoint is replaced by per-app endpoints. The platform keeps
-     * serving this path until 0.5.0, when both it and this method are removed.
-     */
-    async getRoomState(
-        url: string,
-        room: string,
-        options?: GetRoomStateMessagesOptions,
-    ): Promise<TypedResponse<RoomStateResponse>> {
-        const endpoint = `${url}/api/v0/room/${encodeURIComponent(room)}/state`
-        return await this.get(this.withQuery(endpoint, options))
-    }
-
-    /**
      * Fetches a low-res (600x420px) raster preview of the scratchpad, a 0.6px scale of the 1000x700 canvas.
      *
      * The body is a PNG, so read it with `arrayBuffer()` rather than `json()`.
@@ -118,26 +97,6 @@ export class ScribblePubClient {
     ): Promise<Response> {
         return await this.get(
             `${url}/api/v0/room/${encodeURIComponent(room)}/scratchpad/preview`,
-            this.ifModifiedSince(options),
-        )
-    }
-
-    /**
-     * Fetches a low-res (600x420px) raster preview of the room, a 0.6px scale of the 1000x700 canvas.
-     *
-     * Calls `GET /api/v0/room/{room}/preview`
-     *
-     * @deprecated since 0.4.0, use {@link ScribblePubClient.getScratchpadPreview}.
-     * The preview renders the scratchpad, so it moved under the `/scratchpad` infix.
-     * The platform keeps serving this path until 0.5.0.
-     */
-    async getRoomPreview(
-        url: string,
-        room: string,
-        options?: GetRoomPreviewOptions,
-    ): Promise<Response> {
-        return await this.get(
-            `${url}/api/v0/room/${encodeURIComponent(room)}/preview`,
             this.ifModifiedSince(options),
         )
     }

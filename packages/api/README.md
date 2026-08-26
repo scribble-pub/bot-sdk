@@ -77,9 +77,6 @@ quote, not an HTTP error:
 - A `quoteStart` beyond the text length drops the quote entirely (posting as a plain reply).
 - A `quoteLength` ≤ 0 also drops the quote.
 
-_(Note: The message format knows only raw text. Rendering concerns like mention chips or emoji grapheme-cluster snapping
-happen strictly on the client)._
-
 ### Other Languages
 
 Because this package serves as the official reference for the Bot API, if you are building a bot in another language,

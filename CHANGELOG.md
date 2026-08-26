@@ -13,6 +13,8 @@ help developing custom clients.
 
 > [!NOTE] Preliminary notes for a release that is still in progress. Everything here may still change.
 
+A massive breaking update. Once the server API is upgraded to 0.4.0, the old bots stop working. Read below for details.
+
 **Room reads are now per-app.** The single `GET /api/v0/room/{room}/state` endpoint is replaced by individual endpoints
 for scratchpad and (later) chat. Internally, the apps barely share anything, so having a single endpoint can create an
 illusion of having a single, strictly synchronized, room state, which is not true.
@@ -39,6 +41,8 @@ illusion of having a single, strictly synchronized, room state, which is not tru
   - **Bots on 0.3.0 will stop responding** until upgraded, because they drop unknown triggers.
 - **Legacy `trigger` discriminant removed:** The discriminant is now strictly `type` (matching `Action.type`). The old
   `trigger.trigger` spelling is completely gone.
+- **Unprefixed `addMessage` action removed:** Only `chat.addMessage` is accepted. The unprefixed spelling deprecated in
+  0.3.0 is no longer parsed, and `LegacyAddMessageAction` is gone from the types.
 
 #### Deprecated
 
@@ -88,16 +92,20 @@ illusion of having a single, strictly synchronized, room state, which is not tru
 - **Unsupported trigger types are safely dropped.** They are acknowledged with a `200` response and will only trigger
   the `"unsupported"` handler, if registered. Upgrading the SDK is required to support new trigger types.
 
-#### Deprecated
+#### Removed
 
-- `bot.getRoomStateMessages(room, options?)` > `bot.getScratchpadStateMessages(room, options?)`.
-- `bot.getRoomState(room)` > `bot.getScratchpadState(room)`, which returns a `ScratchpadState` rather than a `RoomState`
+Since this is a massive breaking update where bots have to upgrade for `chat.addressed` without any backwards compatibility layers,
+we decided just to drop other things that would otherwise be just deprecated.
+
+- `bot.getRoomStateMessages(room, options?)` → `bot.getScratchpadStateMessages(room, options?)`.
+- `bot.getRoomState(room)` → `bot.getScratchpadState(room)`, which returns a `ScratchpadState` rather than a `RoomState`
   wrapping it, so the `state.scratchpad.` prefix is gone.
-- `bot.getRoomPreviewImage(room, options?)` > `bot.getScratchpadPreviewImage(room, options?)`.
-- `RoomStateResponse` > `ScratchpadStateResponse`, `GetRoomStateMessagesOptions` > `GetScratchpadStateOptions`,
-  `GetRoomPreviewOptions` > `GetScratchpadPreviewOptions`, `RoomPreviewImage` > `ScratchpadPreviewImage`.
-- `ScribblePubClient.getRoomState` > `ScribblePubClient.getScratchpadState`, `ScribblePubClient.getRoomPreview` >
+- `bot.getRoomPreviewImage(room, options?)` → `bot.getScratchpadPreviewImage(room, options?)`.
+- `RoomStateResponse` → `ScratchpadStateResponse`, `GetRoomStateMessagesOptions` → `GetScratchpadStateOptions`,
+  `GetRoomPreviewOptions` → `GetScratchpadPreviewOptions`, `RoomPreviewImage` → `ScratchpadPreviewImage`.
+- `ScribblePubClient.getRoomState` → `ScribblePubClient.getScratchpadState`, `ScribblePubClient.getRoomPreview` →
   `ScribblePubClient.getScratchpadPreview`.
+- `LegacyAddMessageAction`, along with acceptance of the unprefixed `addMessage` spelling.
 
 #### Added
 
@@ -139,9 +147,6 @@ illusion of having a single, strictly synchronized, room state, which is not tru
   the missing field instead of silently falling back as unsupported.
 
 #### Notes
-
-- **Per-hook metadata belongs on the trigger.** Handlers only receive the `trigger` object. Fields added alongside
-  `trigger` in the request body will be ignored by bots. Use `TriggerBase` for delivery metadata.
 - **`RoomState` is not deprecated.** It remains for a convenient way to hold the entire room state in a single value.
 
 ## [0.3.0] - 2026-08-20

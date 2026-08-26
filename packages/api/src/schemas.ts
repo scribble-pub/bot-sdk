@@ -261,18 +261,11 @@ export type AddMessagePayload = {
 export type AddMessageAction = { type: "chat.addMessage" } & AddMessagePayload
 
 /**
- * The unprefixed spelling of {@link AddMessageAction}, still accepted by the platform.
- *
- * @deprecated Use `"chat.addMessage"`. Support for this spelling will be removed before 1.0.
- */
-export type LegacyAddMessageAction = { type: "addMessage" } & AddMessagePayload
-
-/**
  * A single operation your bot wants to perform in the room.
  * This is designed as a "Flat Discriminated Union", meaning the 'type' field
  * dictates which payload fields are required next to it.
  */
-export type Action = AddMessageAction | LegacyAddMessageAction
+export type Action = AddMessageAction
 
 /**
  * The JSON payload your bot server must return to scribble.pub.
@@ -527,29 +520,9 @@ export type ScratchpadStateResponse = {
 }
 
 /**
- * The body returned by a room state fetch.
- *
- * @deprecated since 0.4.0. The single room state endpoint is replaced by per-app endpoints;
- * use {@link ScratchpadStateResponse}. Removed in 0.5.0.
- */
-export type RoomStateResponse = {
-    /**
-     * The messages rebuilding the room state, in the order they must be applied.
-     */
-    messages: RoomMessage[]
-}
-
-/**
  * Options for fetching scratchpad messages, left for future polling/delta parameters.
  */
 export type GetScratchpadStateOptions = Record<string, never>
-
-/**
- * Options for fetching room messages, left for future polling/delta parameters.
- *
- * @deprecated since 0.4.0, use {@link GetScratchpadStateOptions}. Removed in 0.5.0.
- */
-export type GetRoomStateMessagesOptions = GetScratchpadStateOptions
 
 /**
  * Options for fetching a scratchpad's raster preview image.
@@ -562,13 +535,6 @@ export interface GetScratchpadPreviewOptions {
      */
     ifModifiedSince?: string
 }
-
-/**
- * Options for fetching a room's raster preview image.
- *
- * @deprecated since 0.4.0, use {@link GetScratchpadPreviewOptions}. Removed in 0.5.0.
- */
-export type GetRoomPreviewOptions = GetScratchpadPreviewOptions
 
 /**
  * Options for fetching the site logo image.

@@ -110,9 +110,8 @@ const ReplyTargetSchema = z
         }
     })
 
-// "addMessage" is the deprecated spelling of "chat.addMessage", accepted until it is removed before 1.0.
 const ActionSchema: z.ZodType<Action> = z.looseObject({
-    type: z.literal(["chat.addMessage", "addMessage"]),
+    type: z.literal("chat.addMessage"),
     text: z.string(),
     localId: localIdField,
     replyTo: ReplyTargetSchema.optional(),
