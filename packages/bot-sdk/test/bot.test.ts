@@ -2,8 +2,9 @@ import { createServer } from "node:http"
 import type { AddressInfo } from "node:net"
 import { Hono } from "hono"
 import { afterEach, describe, expect, it, vi } from "vitest"
-import type { Action, ChatMentionTrigger, HookResponse } from "../src/index.mjs"
+import type { Action, ChatAddressedTrigger, HookResponse } from "../src/index.mjs"
 import ScribblePubBot, {
+    MAX_LOCAL_ID,
     ScribblePubApiError,
     ScribblePubValidationError,
     type ValidationError,
@@ -12,16 +13,26 @@ import ScribblePubBot, {
 const TOKEN = "test-secret-token"
 const AP = "https://ap.scribble.pub"
 
-type MentionPayload = { trigger: Omit<ChatMentionTrigger, "trigger"> }
+type AddressedPayload = { trigger: ChatAddressedTrigger }
 
-function hookPayload(overrides: Partial<ChatMentionTrigger> = {}): MentionPayload {
+/** A message replying to one of the bot's own messages, which the bot recognizes by `localId`. */
+function replyPayload(overrides: Partial<ChatAddressedTrigger> = {}): AddressedPayload {
+    return hookPayload({
+        text: "and what about this?",
+        replyTo: { messageId: 77, localId: 77, username: "TestBot", text: "Hi there!" },
+        ...overrides,
+    })
+}
+
+function hookPayload(overrides: Partial<ChatAddressedTrigger> = {}): AddressedPayload {
     return {
         trigger: {
-            type: "chat.mention",
+            type: "chat.addressed",
             text: "@TestBot hello",
             room: "main",
             timestamp: 1779999999999,
             username: "TheBestArtist",
+            messageId: 4210,
             directUrl: "https://eu.scribble.pub",
             ...overrides,
         },
@@ -83,7 +94,7 @@ describe("scribble.pub bot with Hono", () => {
             actions: [
                 {
                     type: "chat.addMessage",
-                    text: "Responding to a chat.mention in main",
+                    text: "Responding to a chat.addressed in main",
                 },
             ],
         } as HookResponse)
@@ -103,7 +114,7 @@ describe("scribble.pub bot with Hono", () => {
     it("awaits an async handler before answering", async () => {
         const bot = new ScribblePubBot({ token: TOKEN })
 
-        bot.on("chat.mention", async (trigger) => {
+        bot.on("chat.addressed", async (trigger) => {
             await new Promise((resolve) => setTimeout(resolve, 5))
             return [{ type: "chat.addMessage", text: `Hi, ${trigger.username}!` }]
         })
@@ -155,11 +166,24 @@ describe("scribble.pub bot with Hono", () => {
         )
     })
 
+    it("rejects the legacy `trigger` spelling of the discriminant", async () => {
+        const bot = new ScribblePubBot({ token: TOKEN })
+        bot.on("hook", () => [])
+
+        const { type, ...rest } = hookPayload().trigger
+        const res = await postHook(bot, JSON.stringify({ trigger: { ...rest, trigger: type } }))
+
+        expect(res.status).toBe(400)
+        expect((await res.json()).details).toEqual(
+            expect.arrayContaining([expect.objectContaining({ path: "trigger.type" })]),
+        )
+    })
+
     it('offers an unsupported trigger to the "unsupported" handler, base fields and all', async () => {
         const bot = new ScribblePubBot({ token: TOKEN })
         const seen = vi.fn()
 
-        bot.on("chat.mention", () => [{ type: "chat.addMessage", text: "should not run" }])
+        bot.on("chat.addressed", () => [{ type: "chat.addMessage", text: "should not run" }])
         bot.on("unsupported", (trigger) => {
             seen(trigger.type, trigger.room)
             return [{ type: "chat.addMessage", text: `dropped ${trigger.type}` }]
@@ -180,11 +204,97 @@ describe("scribble.pub bot with Hono", () => {
         } as HookResponse)
     })
 
+    it("delivers a reply to the bot's own message, identifiable by localId", async () => {
+        const bot = new ScribblePubBot({ token: TOKEN })
+
+        bot.on("chat.addressed", (trigger) => [
+            {
+                type: "chat.addMessage",
+                text: `${trigger.username} replied to my #${trigger.replyTo?.localId}`,
+                localId: trigger.messageId,
+                replyTo: { messageId: trigger.messageId },
+            },
+        ])
+
+        const res = await postHook(bot, JSON.stringify(replyPayload()))
+
+        expect(res.status).toBe(200)
+        expect(await res.json()).toEqual({
+            actions: [
+                {
+                    type: "chat.addMessage",
+                    text: "TheBestArtist replied to my #77",
+                    localId: 4210,
+                    replyTo: { messageId: 4210 },
+                },
+            ],
+        } as HookResponse)
+    })
+
+    it("delivers a reply to another user's message, quote and all", async () => {
+        const bot = new ScribblePubBot({ token: TOKEN })
+        const seen = vi.fn()
+
+        bot.on("chat.addressed", (trigger) => {
+            // No localId: the reply targets somebody else's message, not the bot's.
+            seen(trigger.replyTo?.username, trigger.replyTo?.localId, trigger.replyTo?.quoteText)
+            return []
+        })
+
+        const payload = hookPayload({
+            text: "@TestBot what do you think?",
+            replyTo: {
+                messageId: 4100,
+                username: "Mary",
+                text: "👽👾🤖 Danger! The reactor is melting! Danger!",
+                quoteStart: 16,
+                quoteText: "reactor",
+            },
+        })
+
+        const res = await postHook(bot, JSON.stringify(payload))
+
+        expect(res.status).toBe(200)
+        expect(seen).toHaveBeenCalledWith("Mary", undefined, "reactor")
+    })
+
+    it("delivers a plain tag with no replyTo at all", async () => {
+        const bot = new ScribblePubBot({ token: TOKEN })
+        const seen = vi.fn()
+
+        bot.on("chat.addressed", (trigger) => {
+            seen(trigger.replyTo)
+            return []
+        })
+
+        const res = await postHook(bot, JSON.stringify(hookPayload()))
+
+        expect(res.status).toBe(200)
+        expect(seen).toHaveBeenCalledWith(undefined)
+    })
+
+    it("accepts a replyTo whose message is gone, keeping the id but not the text", async () => {
+        const bot = new ScribblePubBot({ token: TOKEN })
+        const seen = vi.fn()
+
+        bot.on("chat.addressed", (trigger) => {
+            seen(trigger.replyTo?.messageId, trigger.replyTo?.text)
+            return []
+        })
+
+        const payload = replyPayload({ replyTo: { messageId: 77, username: "TestBot" } })
+
+        const res = await postHook(bot, JSON.stringify(payload))
+
+        expect(res.status).toBe(200)
+        expect(seen).toHaveBeenCalledWith(77, undefined)
+    })
+
     it('does not send a supported trigger to the "unsupported" handler', async () => {
         const bot = new ScribblePubBot({ token: TOKEN })
         const unsupported = vi.fn(() => [])
 
-        bot.on("chat.mention", () => [{ type: "chat.addMessage", text: "handled" }])
+        bot.on("chat.addressed", () => [{ type: "chat.addMessage", text: "handled" }])
         bot.on("unsupported", unsupported)
 
         const res = await postHook(bot, JSON.stringify(hookPayload()))
@@ -239,7 +349,7 @@ describe("scribble.pub bot with Hono", () => {
         const bot = new ScribblePubBot({ token: TOKEN })
         const catchAll = vi.fn()
 
-        bot.on("chat.mention", (trigger) => [
+        bot.on("chat.addressed", (trigger) => [
             { type: "chat.addMessage", text: `Hi, ${trigger.username}!` },
         ])
         bot.on("hook", () => {
@@ -484,6 +594,48 @@ describe("sendActions", () => {
             // @ts-expect-error intentionally malformed to test the guardrail
             bot.sendActions("main", [{ type: "chat.addMessage" }]),
         ).rejects.toThrow(/invalid actions: actions\.0\.text/)
+        expect(fetchMock).not.toHaveBeenCalled()
+    })
+
+    it("rejects a reply naming both messageId and localId", async () => {
+        const fetchMock = stubFetch(Response.json({ ok: true }))
+        const bot = new ScribblePubBot({ token: TOKEN })
+
+        await expect(
+            bot.sendActions("main", [
+                { type: "chat.addMessage", text: "hi", replyTo: { messageId: 1, localId: 2 } },
+            ]),
+        ).rejects.toThrow(/give either messageId or localId, not both/)
+        expect(fetchMock).not.toHaveBeenCalled()
+    })
+
+    it("rejects a reply naming no target at all", async () => {
+        const bot = new ScribblePubBot({ token: TOKEN })
+
+        await expect(
+            bot.sendActions("main", [{ type: "chat.addMessage", text: "hi", replyTo: {} }]),
+        ).rejects.toThrow(/one of messageId or localId is required/)
+    })
+
+    it("rejects a half-specified quote", async () => {
+        const bot = new ScribblePubBot({ token: TOKEN })
+
+        await expect(
+            bot.sendActions("main", [
+                { type: "chat.addMessage", text: "hi", replyTo: { messageId: 1, quoteStart: 3 } },
+            ]),
+        ).rejects.toThrow(/quoteStart and quoteLength must be given together/)
+    })
+
+    it("rejects a local ID that JSON would round on its way back", async () => {
+        const fetchMock = stubFetch(Response.json({ ok: true }))
+        const bot = new ScribblePubBot({ token: TOKEN })
+
+        await expect(
+            bot.sendActions("main", [
+                { type: "chat.addMessage", text: "hi", localId: MAX_LOCAL_ID + 2 },
+            ]),
+        ).rejects.toThrow(/invalid actions: actions\.0\.localId/)
         expect(fetchMock).not.toHaveBeenCalled()
     })
 

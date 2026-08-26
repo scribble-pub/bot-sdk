@@ -8,54 +8,54 @@ import type {
     SupportedTriggerType,
 } from "./schemas.js"
 
-/**
- * An adapter so that both `type` and `trigger` exist, for backwards compatibility.
- * `trigger` is deprecated and removed before 1.0.
- */
-function aliasTriggerType(value: unknown): unknown {
-    if (typeof value !== "object" || value === null) {
-        return value
-    }
-
-    const raw = value as Record<string, unknown>
-    const type = typeof raw.type === "string" ? raw.type : raw.trigger
-
-    return typeof type === "string" ? { ...raw, type, trigger: type } : value
-}
-
 const baseFields = {
     room: z.string(),
     timestamp: z.number(),
     directUrl: z.string(),
 }
 
+// `.int()` already refuses anything outside the safe-integer range, which is exactly MAX_LOCAL_ID.
+const localIdField = z
+    .number()
+    .int()
+    .min(0)
+    .optional()
+    .transform((value) => (value ? value : undefined))
+
 const chatFields = {
     ...baseFields,
     username: z.string(),
+    messageId: z.number(),
     text: z.string(),
 }
 
-const ChatMentionTriggerSchema = z.looseObject({
+const RepliedMessageSchema = z.looseObject({
+    messageId: z.number(),
+    localId: localIdField,
+    username: z.string(),
+    text: z.string().optional(),
+    quoteStart: z.number().int().min(0).optional(),
+    quoteText: z.string().optional(),
+})
+
+const ChatAddressedTriggerSchema = z.looseObject({
     ...chatFields,
-    type: z.literal("chat.mention"),
+    type: z.literal("chat.addressed"),
+    replyTo: RepliedMessageSchema.optional(),
 })
 
 const triggerSchemasByType: Record<SupportedTriggerType, z.ZodType> = {
-    "chat.mention": ChatMentionTriggerSchema,
+    "chat.addressed": ChatAddressedTriggerSchema,
 }
 
 // Parse the common base fields first to avoid throwing 400 errors for unsupported trigger types.
 // We use a loose object so fields aren't stripped before they can be checked by specific schemas.
 // We dispatch manually instead of using `z.union` to provide more accurate error messages.
 const TriggerSchema: z.ZodType<IncomingTrigger> = z
-    .preprocess(
-        aliasTriggerType,
-        z.looseObject({
-            ...baseFields,
-            type: z.string(),
-            trigger: z.string(),
-        }),
-    )
+    .looseObject({
+        ...baseFields,
+        type: z.string(),
+    })
     .superRefine((trigger, ctx) => {
         const schema = triggerSchemasByType[trigger.type as SupportedTriggerType]
         if (!schema) {
@@ -78,10 +78,44 @@ const RegisterWebhookPayloadSchema: z.ZodType<RegisterWebhookPayload> = z.object
     url: z.url({ protocol: /^https?$/ }),
 })
 
+const ReplyTargetSchema = z
+    .looseObject({
+        messageId: z.number().optional(),
+        localId: localIdField,
+        quoteStart: z.number().int().min(0).optional(),
+        quoteLength: z.number().int().positive().optional(),
+    })
+    .superRefine((replyTo, ctx) => {
+        // Choose either `messageId` or `localId`
+        if (replyTo.messageId !== undefined && replyTo.localId !== undefined) {
+            ctx.addIssue({
+                code: "custom",
+                path: ["messageId"],
+                message: "give either messageId or localId, not both",
+            })
+        }
+        if (replyTo.messageId === undefined && replyTo.localId === undefined) {
+            ctx.addIssue({
+                code: "custom",
+                path: ["messageId"],
+                message: "one of messageId or localId is required",
+            })
+        }
+        if ((replyTo.quoteStart === undefined) !== (replyTo.quoteLength === undefined)) {
+            ctx.addIssue({
+                code: "custom",
+                path: [replyTo.quoteStart === undefined ? "quoteStart" : "quoteLength"],
+                message: "quoteStart and quoteLength must be given together",
+            })
+        }
+    })
+
 // "addMessage" is the deprecated spelling of "chat.addMessage", accepted until it is removed before 1.0.
 const ActionSchema: z.ZodType<Action> = z.looseObject({
     type: z.literal(["chat.addMessage", "addMessage"]),
     text: z.string(),
+    localId: localIdField,
+    replyTo: ReplyTargetSchema.optional(),
 })
 
 const HookResponseSchema: z.ZodType<HookResponse> = z.looseObject({

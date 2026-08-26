@@ -1,7 +1,15 @@
 /**
  * The trigger types this package version supports.
  */
-export const SUPPORTED_TRIGGER_TYPES = ["chat.mention"] as const
+export const SUPPORTED_TRIGGER_TYPES = ["chat.addressed"] as const
+
+/**
+ * The largest value a local message ID can contain.
+ *
+ * Local IDs are capped at 2^53-1 (9007199254740991) for JavaScript compatibility.
+ * Any higher value (e.g., coming from other languages) is rejected.
+ */
+export const MAX_LOCAL_ID = Number.MAX_SAFE_INTEGER
 
 export type SupportedTriggerType = (typeof SUPPORTED_TRIGGER_TYPES)[number]
 
@@ -13,13 +21,6 @@ export type TriggerBase = {
      * The type of trigger that caused this hook to fire.
      */
     type: string
-
-    /**
-     * The legacy spelling of {@link TriggerBase.type}.
-     *
-     * @deprecated Use `type`. Support for this spelling will be removed before 1.0.
-     */
-    trigger: string
 
     /**
      * The room where the event occurred.
@@ -48,27 +49,107 @@ export type ChatTriggerBase = TriggerBase & {
     username: string
 
     /**
-     * The text that triggered the hook. May include the mention if it's `chat.mention`.
+     * The room-global unique ID of the chat message that triggered the hook.
+     *
+     * Use it to reply to this message ({@link OutboundReplyTarget.messageId}), to record the message
+     * in your own storage, and as a deduplication key — it is stable and unique.
+     *
+     * IDs rise monotonically, so sorting by it gives chronological order. They come from the chat's global event
+     * counter, shared with other events (such as message editing), so expect gaps: consecutive messages rarely
+     * have consecutive IDs.
+     */
+    messageId: number
+
+    /**
+     * The text that triggered the hook.
+     *
+     * When the message tags your bot, the tag is part of the text — the platform does not strip it.
      */
     text: string
 }
 
 /**
- * A user explicitly tagged your bot (e.g., "@HelloBot").
+ * The message a chat message is a reply to.
  *
- * {@link ChatTriggerBase.text} includes the mention itself.
+ * Quote offsets are **rune (Unicode code point) indices** into {@link RepliedMessage.text}.
+ * JavaScript strings are indexed in UTF-16 code units instead, which differ for anything above
+ * U+FFFF (most emoji), so convert with {@link toRuneOffset}/{@link sliceRunes} rather than
+ * `slice`/`indexOf` — see {@link quoteRange}.
  */
-export type ChatMentionTrigger = ChatTriggerBase & {
-    type: "chat.mention"
+export type RepliedMessage = {
+    /**
+     * The room-global ID of the replied-to message. The same field as {@link ChatTriggerBase.messageId}.
+     *
+     * Always present, even when the message itself is no longer available.
+     */
+    messageId: number
 
-    /** @deprecated Use `type`. Removed before 1.0. */
-    trigger: "chat.mention"
+    /**
+     * The value your bot passed as {@link AddMessagePayload.localId} when it posted this message.
+     *
+     * Present only when the replied-to message is your bot's own and contains a local ID,
+     * which makes it the key to look the message up in your own storage.
+     */
+    localId?: number | undefined
+
+    /**
+     * The username of the author of the replied-to message.
+     */
+    username: string
+
+    /**
+     * The full text of the replied-to message.
+     *
+     * Absent when the message is not available: it was deleted, or it expired.
+     */
+    text?: string | undefined
+
+    /**
+     * The rune offset in {@link RepliedMessage.text} where the quoted fragment starts.
+     *
+     * Present together with {@link RepliedMessage.quoteText} when the reply quotes a fragment
+     * rather than refers to the whole message.
+     */
+    quoteStart?: number | undefined
+
+    /**
+     * The quoted fragment, as it read when the reply was posted.
+     *
+     * The platform stores it with the reply, so it stays stable even if the replied-to message
+     * changes later. That also means it may no longer appear at `quoteStart`, or in `text` at all.
+     */
+    quoteText?: string | undefined
+}
+
+/**
+ * A chat message addressed to your bot: it tags the bot (e.g., "@HelloBot"), replies to one of the
+ * bot's own messages, or both.
+ *
+ * - **Replied to.** {@link ChatAddressedTrigger.replyTo} is present. It is your bot's own message
+ *   when {@link RepliedMessage.localId} is set, or when {@link RepliedMessage.username} is your
+ *   bot's name — otherwise the user replied to somebody else while tagging you.
+ * - **Tagged.** The tag is part of {@link ChatTriggerBase.text}. Match it against your bot's own
+ *   username.
+ */
+export type ChatAddressedTrigger = ChatTriggerBase & {
+    type: "chat.addressed"
+
+    /**
+     * The message this one replies to, if it is a reply at all.
+     *
+     * Present whether the reply targets one of your bot's messages or somebody else's — a user
+     * replying to a third party while tagging your bot ("@HelloBot what do you think about it?")
+     * delivers that third party's message here.
+     *
+     * Absent when the message is not a reply.
+     */
+    replyTo?: RepliedMessage | undefined
 }
 
 /**
  * A specific event that caused this webhook to fire, supported by this package version.
  */
-export type Trigger = ChatMentionTrigger
+export type Trigger = ChatAddressedTrigger
 
 /**
  * A trigger object as it comes from the platform.
@@ -81,9 +162,6 @@ export type IncomingTrigger =
     | (TriggerBase & {
           // `string & {}` keeps autocomplete for the supported literals while still accepting anything else.
           type: string & {}
-
-          /** @deprecated Use `type`. Removed before 1.0. */
-          trigger: string & {}
       })
 
 /**
@@ -106,10 +184,75 @@ export type RegisterWebhookPayload = {
 }
 
 /**
+ * The message an outbound chat message replies to, and which part of it to quote.
+ *
+ * Give exactly one of {@link OutboundReplyTarget.messageId} or {@link OutboundReplyTarget.localId}.
+ */
+export type OutboundReplyTarget = {
+    /**
+     * The room-global ID of the message to reply to, as delivered in
+     * {@link ChatTriggerBase.messageId} or {@link RepliedMessage.messageId}.
+     */
+    messageId?: number | undefined
+
+    /**
+     * The {@link AddMessagePayload.localId} of one of your bot's own earlier messages.
+     *
+     * Lets a bot reply to something it posted without fetching the room-global ID.
+     * Mutually exclusive with {@link OutboundReplyTarget.messageId}; passing both is rejected.
+     */
+    localId?: number | undefined
+
+    /**
+     * The rune offset in the target message where the quoted fragment starts.
+     *
+     * Rune (Unicode code point) indices, not JavaScript's UTF-16 code units — use
+     * {@link quoteRange} to derive both quote fields from the text you want to quote.
+     * Must be given together with {@link OutboundReplyTarget.quoteLength}.
+     */
+    quoteStart?: number | undefined
+
+    /**
+     * The length of the quoted fragment in runes.
+     *
+     * The platform slices the fragment out of the target message itself, so a bot can never
+     * attribute text to someone who did not write it.
+     *
+     * The platform clamps rather than fails: a quote running past the end of the target is cut
+     * short, and a `quoteStart` at or beyond the end drops the quote entirely while the message
+     * still posts as a plain reply.
+     */
+    quoteLength?: number | undefined
+}
+
+/**
  * Tells the platform to post a new chat message into the room as the bot.
  */
 export type AddMessagePayload = {
     text: string
+
+    /**
+     * Your own ID for this message, unique among your bot's messages in this room's chat.
+     *
+     * The platform gives it back as {@link RepliedMessage.localId}
+     * which can help the bot match a reply against its own records without fetching room-global IDs.
+     * It can also serve deduplication: re-sending the same `localId` into the
+     * same room drops the new message, as long as the original message exists
+     * (chat messages expire after about two days).
+     *
+     * Send nothing or 0 to have no local ID. 0 or absent values are not deduplicated.
+     *
+     * We recommend keeping an incremental counter in a DB. For single-instance, memory-only bots,
+     * a simple solution with little risks can be setting the local counter to current unix time in milliseconds.
+     *
+     * Optional; 0 means no local ID. Must not exceed {@link MAX_LOCAL_ID}.
+     */
+    localId?: number | undefined
+
+    /**
+     * Makes this message a reply, optionally quoting part of what it replies to.
+     */
+    replyTo?: OutboundReplyTarget | undefined
 }
 
 /**

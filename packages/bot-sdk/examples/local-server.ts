@@ -10,17 +10,42 @@ const BOT_TOKEN = process.env.BOT_TOKEN || "test-secret-token"
 // Where the platform should send hooks, e.g., "http://localhost:3005/webhook"
 const PUBLIC_URL = process.env.PUBLIC_URL
 
+// Seeding from the clock keeps local IDs unique across restarts without any storage.
+// A bot that persists state should count in its DB.
+let localIdSeq = Date.now()
+const nextLocalId = () => ++localIdSeq
+
 const bot = new ScribblePubBot({
     token: BOT_TOKEN,
     baseUrl: process.env.API_BASE_URL,
 })
 
-bot.on("chat.mention", (trigger) => {
-    console.log(`[Bot] Mentioned by ${trigger.username}`)
+bot.on("chat.addressed", (trigger) => {
+    const parent = trigger.replyTo
+
+    // A reply to the bot's own message gets the localId the bot sent it with.
+    if (parent?.localId) {
+        console.log(`[Bot] ${trigger.username} replied to own #${parent.localId}: '${parent.text}'`)
+        return [
+            {
+                type: "chat.addMessage",
+                text: parent.quoteText
+                    ? `You quoted '${parent.quoteText}'.`
+                    : `You replied '${trigger.text}'.`,
+                localId: nextLocalId(),
+                replyTo: { messageId: trigger.messageId },
+            },
+        ]
+    }
+
+    console.log(`[Bot] Addressed by ${trigger.username}`)
     return [
         {
             type: "chat.addMessage",
             text: `Hi ${trigger.username}! You wrote '${trigger.text}' to me.`,
+            // Comes back as replyTo.localId when somebody replies to this message.
+            localId: nextLocalId(),
+            replyTo: { messageId: trigger.messageId },
         },
     ]
 })

@@ -1,6 +1,6 @@
 import type {
     Action,
-    ChatMentionTrigger,
+    ChatAddressedTrigger,
     ErrorResponse,
     GetLogoOptions,
     GetRoomPreviewOptions,
@@ -29,7 +29,7 @@ export type {
     Action,
     AddMessageAction,
     AddMessagePayload,
-    ChatMentionTrigger,
+    ChatAddressedTrigger,
     ChatTriggerBase,
     ErrorResponse,
     GetLogoOptions,
@@ -41,7 +41,9 @@ export type {
     HookResponse,
     IncomingTrigger,
     LegacyAddMessageAction,
+    OutboundReplyTarget,
     RegisterWebhookPayload,
+    RepliedMessage,
     RgbaComponents,
     RoomMessage,
     RoomStateResponse,
@@ -52,7 +54,17 @@ export type {
     TriggerBase,
     ValidationError,
 } from "@scribble-pub/api"
-export { rgbaToComponents, rgbaToHex, SUPPORTED_TRIGGER_TYPES } from "@scribble-pub/api"
+export {
+    MAX_LOCAL_ID,
+    quoteRange,
+    rgbaToComponents,
+    rgbaToHex,
+    runeLength,
+    SUPPORTED_TRIGGER_TYPES,
+    sliceRunes,
+    toRuneOffset,
+    toUtf16Offset,
+} from "@scribble-pub/api"
 export * from "./state.js"
 export { ScribblePubApiError, ScribblePubValidationError }
 
@@ -139,14 +151,14 @@ export type Handler<T> = (trigger: T) => HookResult | Promise<HookResult>
 /**
  * The events {@link ScribblePubBot.on} accepts.
  *
- * - Specific trigger types (e.g., `"chat.mention"`) receive a strictly typed `trigger`.
+ * - Specific trigger types (e.g., `"chat.addressed"`) receive a strictly typed `trigger`.
  * - `"hook"` is the catch-all for triggers without a specific handler, receiving a `Trigger` union.
  * - `"unsupported"` receives only the base fields. It fires for triggers unknown to this SDK version, which are otherwise dropped silently.
  */
 type EventMap = {
     hook: Handler<Trigger>
     unsupported: Handler<TriggerBase>
-    "chat.mention": Handler<ChatMentionTrigger>
+    "chat.addressed": Handler<ChatAddressedTrigger>
 }
 
 /**
@@ -191,7 +203,7 @@ class ScribblePubBot {
     /**
      * Registers an event handler, replacing any existing handler for that event.
      *
-     * - Specific trigger events (e.g., `"chat.mention"`) receive a strictly typed `trigger`.
+     * - Specific trigger events (e.g., `"chat.addressed"`) receive a strictly typed `trigger`.
      * - `"hook"` is the catch-all for triggers without a specific handler.
      * - `"unsupported"` captures triggers unknown to this SDK version.
      *
