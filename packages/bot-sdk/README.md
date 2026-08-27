@@ -20,20 +20,20 @@ listen for webhook events:
 import ScribblePubBot from "@scribble-pub/bot-sdk";
 
 // 1. Initialize the bot with your webhook secret
-const bot = new ScribblePubBot({ token: process.env.BOT_TOKEN });
+const bot = new ScribblePubBot({token: process.env.BOT_TOKEN});
 
 // 2. Define a handler per trigger type you care about
 bot.on("chat.addressed", (trigger) => {
-  console.log(`${trigger.username} addressed the bot: ${trigger.text}`);
+    console.log(`${trigger.username} addressed the bot: ${trigger.text}`);
 
-  // Return an array of actions for the platform to execute in the room
-  return [
-    {
-      type: "chat.addMessage",
-      text: `You said: ${trigger.text}`,
-      replyTo: { messageId: trigger.messageId },
-    },
-  ];
+    // Return an array of actions for the platform to execute in the room
+    return [
+        {
+            type: "chat.addMessage",
+            text: `You said: ${trigger.text}`,
+            replyTo: {messageId: trigger.messageId},
+        },
+    ];
 });
 ```
 
@@ -41,30 +41,33 @@ bot.on("chat.addressed", (trigger) => {
 
 A hook goes to the handler registered for its trigger type, already narrowed to it:
 
-| Trigger          | Fires when                                                                                              | Fields                                                                                                          |
-| ---------------- | ------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| Trigger          | Fires when                                                                                                          | Fields                                                                                                                                |
+|------------------|---------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------|
 | `chat.addressed` | A message is addressed to your bot — it opens with the bot's tag, replies to one of the bot's own messages, or both | `username`, `userId`, `messageId`, `text` (which includes the tag), and `replyToMessageId` plus `replyTo` when the message is a reply |
 
 Every trigger also contains `type`, `room`, `timestamp`, and `directUrl`, which describe the hook itself rather than
 what happened.
 
-Only a tag that opens the message addresses your bot — naming it mid-sentence is ordinary text. A reply addresses your
-bot only when the message opens with no bot tag, so somebody replying to one of your messages while opening with a
-different bot's tag reaches that bot alone, and your handler does not run.
+Bots only receive webhooks when explicitly addressed. There are two ways to address a bot:
 
-Messages posted by bots emit no hooks, so another bot cannot address yours, and yours never triggers itself. Bot-to-bot
-messages may become possible later as an explicit opt-in; self-triggering will not.
+1. **Tag it at the start of a message.** Tags anywhere else are treated as plain text.
+2. **Reply to its message.** However, if the reply starts with a tag for a different bot, only the tagged bot receives
+   the webhook.
+
+A message posted by a bot emits no hooks. Tagging or replying to a bot from another bot does nothing, and a bot never
+triggers itself. Bot-to-bot messages may become possible later as an explicit opt-in setting (similar to Telegram), but
+a bot triggering itself will remain impossible.
 
 `bot.on("hook", …)` catches any trigger without a defined named handler. It receives `Trigger`, which lists every type
 the SDK delivers, so a `switch` over `trigger.type` covers all of them:
 
 ```typescript
 bot.on("hook", (trigger) => {
-  switch (trigger.type) {
-    case "chat.addressed":
-      console.log(trigger.replyTo ? `re: ${trigger.replyTo.text}` : trigger.text);
-      break;
-  }
+    switch (trigger.type) {
+        case "chat.addressed":
+            console.log(trigger.replyTo ? `re: ${trigger.replyTo.text}` : trigger.text);
+            break;
+    }
 });
 ```
 
@@ -80,7 +83,7 @@ discarding them silently:
 
 ```typescript
 bot.on("unsupported", (trigger) => {
-  logger.warn(`Unsupported trigger type ${trigger.type} in ${trigger.room}. Please update the SDK.`);
+    logger.warn(`Unsupported trigger type ${trigger.type} in ${trigger.room}. Please update the SDK.`);
 });
 ```
 
@@ -92,17 +95,30 @@ separate request instead: see [Sending actions outside a hook](#sending-actions-
 
 Hooks are currently delivered **at most once**: a response that misses the deadline is discarded, not retried.
 
+### User IDs
+
+Every chat trigger and `replyTo` include a `userId` for their authors.
+
+- **Stable**: Usernames can change, but this ID cannot. Always key your per-user storage on `userId`, not the username.
+- **Author types**: The first letter shows the author type: `u` (registered user), `g` (guest), or `b` (bot). Treat the
+  ID as a single string, and expect new prefix letters in the future.
+- **Guests are session-bound**: A guest's identity is tied to their session, so the same person can come back under a
+  new ID.
+- **Length**: 10 characters today, but this is not part of the contract. Ensure your storage can accommodate longer IDs.
+- **Case-sensitive**: Always compare the whole string case-sensitively. Watch out for default database collations (like
+  MySQL's `utf8mb4_general_ci`) that might silently treat `uAbC` and `uabc` as the same user.
+
 ### Replies and quotes
 
 Reply to a message by naming it in `replyTo`:
 
 ```typescript
 bot.on("chat.addressed", (trigger) => [
-  {
-    type: "chat.addMessage",
-    text: `You said: ${trigger.text}`,
-    replyTo: { messageId: trigger.messageId },
-  },
+    {
+        type: "chat.addMessage",
+        text: `You said: ${trigger.text}`,
+        replyTo: {messageId: trigger.messageId},
+    },
 ]);
 ```
 
@@ -111,7 +127,8 @@ you needs nothing else.
 
 **Key concepts for replies:**
 
-- **IDs are monotonic and unique:** They are never reused. Sorting by ID gives chronological order within the room.
+- **Chronological sorting:** Sorting by ID guarantees chronological order within a room.
+- **Gaps are normal:** IDs are also used as the room's event counter, shared with message deletion and other events.
 - **Third-party context:** If a user replies to a third party while tagging your bot, `replyTo` will contain that
   third-party message.
 - **A vanished target:** `replyTo` is absent altogether if the target was deleted, expired, or hidden from your bot.
@@ -128,16 +145,16 @@ response entirely, because it can always refer to those messages later using the
 ```typescript
 const workingId = nextId();
 
-bot.sendActions("roomName", [{ type: "chat.addMessage", text: "Working on it…", localId: workingId }]);
+bot.sendActions("roomName", [{type: "chat.addMessage", text: "Working on it…", localId: workingId}]);
 
 // 20 minutes later...
 bot.sendActions("roomName", [
-  {
-    type: "chat.addMessage",
-    text: "Here is your result: 42",
-    localId: nextId(),
-    replyTo: { localId: workingId },
-  },
+    {
+        type: "chat.addMessage",
+        text: "Here is your result: 42",
+        localId: nextId(),
+        replyTo: {localId: workingId},
+    },
 ]);
 ```
 
@@ -173,22 +190,22 @@ itself, ensuring a bot cannot attribute words to someone who did not write them.
 - **Use the SDK tools:** Use the exported SDK helpers to calculate this math safely:
 
 ```typescript
-import { quoteRange, sliceRunes } from "@scribble-pub/bot-sdk";
+import {quoteRange, sliceRunes} from "@scribble-pub/bot-sdk";
 
 bot.on("chat.addressed", (trigger) => {
-  const parent = trigger.replyTo;
-  if (!parent?.text) return [];
+    const parent = trigger.replyTo;
+    if (!parent?.text) return [];
 
-  const range = quoteRange(parent.text, "the interesting part");
-  if (!range) return [];
+    const range = quoteRange(parent.text, "the interesting part");
+    if (!range) return [];
 
-  return [
-    {
-      type: "chat.addMessage",
-      text: "About that…",
-      replyTo: { messageId: parent.messageId, ...range },
-    },
-  ];
+    return [
+        {
+            type: "chat.addMessage",
+            text: "About that…",
+            replyTo: {messageId: parent.messageId, ...range},
+        },
+    ];
 });
 ```
 
@@ -199,10 +216,17 @@ bot.on("chat.addressed", (trigger) => {
 **Stable quotes:** The platform extracts the quote text when the reply is created. If the parent message is edited
 later, your stored `quoteText` remains intact (though `quoteStart` may no longer align).
 
+Out-of-range offsets are safely **truncated or ignored, not rejected**. A bot calculating offsets incorrectly will get a
+malformed quote, not an HTTP error:
+
+- A quote running past the text length is cut short.
+- A `quoteStart` beyond the text length drops the quote entirely (posting as a plain reply).
+- A `quoteLength` ≤ 0 also drops the quote.
+
 #### When the target is gone
 
-Chat messages are retained for about two days. Replying to one that is already deleted or expired does not fail — the message posts,
-pointing at a target nobody can see.
+Chat messages are retained for about two days. Replying to one that is already deleted or expired does not fail — the
+message posts, pointing at a target nobody can see.
 
 ### Security (HMAC-SHA256 Signatures)
 
@@ -230,7 +254,7 @@ JSON body: `{ "error": "invalid signature" }`.
 
 ```typescript
 app.post("/webhook", async (c) => {
-  return await bot.handleHook(c.req.raw);
+    return await bot.handleHook(c.req.raw);
 });
 ```
 
@@ -247,23 +271,23 @@ await bot.registerWebhook("https://example.com/hook");
 If the platform rejects the registration, the SDK throws a `ScribblePubApiError`:
 
 ```typescript
-import ScribblePubBot, { ScribblePubApiError } from "@scribble-pub/bot-sdk";
+import ScribblePubBot, {ScribblePubApiError} from "@scribble-pub/bot-sdk";
 
 try {
-  await bot.registerWebhook(process.env.PUBLIC_URL);
+    await bot.registerWebhook(process.env.PUBLIC_URL);
 } catch (err) {
-  if (err instanceof ScribblePubApiError) {
-    // e.g. 400 "Bad Request: url must start with http:// or https://"
-    console.error(`Registration failed (${err.status}): ${err.body}`);
-  }
-  throw err;
+    if (err instanceof ScribblePubApiError) {
+        // e.g. 400 "Bad Request: url must start with http:// or https://"
+        console.error(`Registration failed (${err.status}): ${err.body}`);
+    }
+    throw err;
 }
 ```
 
 Calls to the platform go to `https://scribble.pub` by default. Use `baseUrl` to point them anywhere else.
 
 ```typescript
-const bot = new ScribblePubBot({ token: process.env.BOT_TOKEN, baseUrl: "http://localhost:8080" });
+const bot = new ScribblePubBot({token: process.env.BOT_TOKEN, baseUrl: "http://localhost:8080"});
 ```
 
 A custom `baseUrl` also switches off the built-in room-to-instance table, which only makes sense in production.
@@ -273,7 +297,7 @@ A custom `baseUrl` also switches off the built-in room-to-instance table, which 
 You can send actions proactively:
 
 ```typescript
-await bot.sendActions("main", [{ type: "chat.addMessage", text: "Good morning!" }]);
+await bot.sendActions("main", [{type: "chat.addMessage", text: "Good morning!"}]);
 ```
 
 If your bot requires longer work such as media processing or LLM querying, you must give the hook response as soon as
@@ -282,8 +306,8 @@ directly.
 
 ```typescript
 bot.on("chat.addressed", (trigger) => {
-  // Answered with an empty action list; the render publishes on its own.
-  void renderTheThing(trigger).then((actions) => bot.sendActions(trigger.room, actions));
+    // Answered with an empty action list; the render publishes on its own.
+    void renderTheThing(trigger).then((actions) => bot.sendActions(trigger.room, actions));
 });
 ```
 
@@ -300,13 +324,13 @@ room and `404` when the room doesn't exist or is offline:
 
 ```typescript
 try {
-  await bot.sendActions(trigger.room, actions);
+    await bot.sendActions(trigger.room, actions);
 } catch (err) {
-  if (err instanceof ScribblePubApiError && err.status === 403) {
-    console.warn(`Bot can't send messages in ${trigger.room}`);
-    return;
-  }
-  throw err;
+    if (err instanceof ScribblePubApiError && err.status === 403) {
+        console.warn(`Bot can't send messages in ${trigger.room}`);
+        return;
+    }
+    throw err;
 }
 ```
 
@@ -332,7 +356,7 @@ the drawing surface.
 The SDK provides a `ScratchpadState` helper class that reduces the message stream into a local state:
 
 ```typescript
-import { ScratchpadState } from "@scribble-pub/bot-sdk";
+import {ScratchpadState} from "@scribble-pub/bot-sdk";
 
 const state = ScratchpadState.fromMessages(response.messages);
 
@@ -420,10 +444,10 @@ That is byte for byte the CSS `#rrggbbaa` notation, so `rgbaToHex` just formats 
 `rgbaToComponents` when you need the components instead.
 
 ```typescript
-import { rgbaToHex, rgbaToComponents } from "@scribble-pub/bot-sdk";
+import {rgbaToHex, rgbaToComponents} from "@scribble-pub/bot-sdk";
 
 ctx.strokeStyle = rgbaToHex(object.rgba); // "#dbffb9ff"
-const { r, g, b, a } = rgbaToComponents(object.rgba);
+const {r, g, b, a} = rgbaToComponents(object.rgba);
 ```
 
 ## The scratchpad preview
@@ -434,7 +458,7 @@ the UI:
 ```typescript
 const preview = await bot.getScratchpadPreviewImage("main");
 if (preview) {
-  drawSomehow(preview.image); // an ArrayBuffer of PNG bytes
+    drawSomehow(preview.image); // an ArrayBuffer of PNG bytes
 }
 ```
 
@@ -452,7 +476,7 @@ has changed.
 let preview = await bot.getScratchpadPreviewImage("main");
 
 // Later, e.g. on the next hook:
-const fresh = await bot.getScratchpadPreviewImage("main", { ifModifiedSince: preview?.lastModified });
+const fresh = await bot.getScratchpadPreviewImage("main", {ifModifiedSince: preview?.lastModified});
 if (fresh) preview = fresh; // null means the preview has not changed
 ```
 
@@ -467,7 +491,7 @@ to get it as a PNG:
 ```typescript
 const logo = await bot.getLogoImage();
 if (logo) {
-  drawSomehow(logo.image); // an ArrayBuffer of PNG bytes
+    drawSomehow(logo.image); // an ArrayBuffer of PNG bytes
 }
 ```
 
@@ -486,7 +510,7 @@ The result contains the response's `ETag`, which changes only when someone draws
 let logo = await bot.getLogoImage();
 
 // Later, e.g. on the next hook:
-const fresh = await bot.getLogoImage({ ifNoneMatch: logo?.etag });
+const fresh = await bot.getLogoImage({ifNoneMatch: logo?.etag});
 if (fresh) logo = fresh; // null means the logo has not changed
 ```
 
@@ -502,14 +526,14 @@ All inputs and outputs are strictly validated. If validation fails, details are 
 - `sendActions` and `registerWebhook` throw a `ScribblePubValidationError` before making the network request.
 
 ```typescript
-import { ScribblePubValidationError } from "@scribble-pub/bot-sdk";
+import {ScribblePubValidationError} from "@scribble-pub/bot-sdk";
 
 try {
-  await bot.sendActions(room, actions);
+    await bot.sendActions(room, actions);
 } catch (e) {
-  if (e instanceof ScribblePubValidationError) {
-    console.error(e.errors[0].path, e.errors[0].message);
-  }
+    if (e instanceof ScribblePubValidationError) {
+        console.error(e.errors[0].path, e.errors[0].message);
+    }
 }
 ```
 

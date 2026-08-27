@@ -263,9 +263,9 @@ export type OutboundReplyTarget = {
      * The platform slices the fragment out of the target message itself, so a bot can never
      * attribute text to someone who did not write it.
      *
-     * The platform clamps rather than fails: a quote running past the end of the target is cut
-     * short, and a `quoteStart` at or beyond the end drops the quote entirely while the message
-     * still posts as a plain reply.
+     * The platform truncates or ignores out-of-range offsets rather than failing: a quote running
+     * past the end of the target is cut short, and a `quoteStart` at or beyond the end drops the
+     * quote entirely while the message still posts as a plain reply.
      */
     quoteLength?: number | undefined
 }
