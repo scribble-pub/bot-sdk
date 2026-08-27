@@ -19,7 +19,14 @@ type AddressedPayload = { trigger: ChatAddressedTrigger }
 function replyPayload(overrides: Partial<ChatAddressedTrigger> = {}): AddressedPayload {
     return hookPayload({
         text: "and what about this?",
-        replyTo: { messageId: 77, localId: 77, username: "TestBot", text: "Hi there!" },
+        replyToMessageId: 77,
+        replyTo: {
+            messageId: 77,
+            localId: 77,
+            username: "TestBot",
+            userId: "bXq4Lm8RdT",
+            text: "Hi there!",
+        },
         ...overrides,
     })
 }
@@ -32,6 +39,7 @@ function hookPayload(overrides: Partial<ChatAddressedTrigger> = {}): AddressedPa
             room: "main",
             timestamp: 1779999999999,
             username: "TheBestArtist",
+            userId: "uK3n9Qw2zL",
             messageId: 4210,
             directUrl: "https://eu.scribble.pub",
             ...overrides,
@@ -243,9 +251,11 @@ describe("scribble.pub bot with Hono", () => {
 
         const payload = hookPayload({
             text: "@TestBot what do you think?",
+            replyToMessageId: 4100,
             replyTo: {
                 messageId: 4100,
                 username: "Mary",
+                userId: "uVb7Ht2ZpN",
                 text: "👽👾🤖 Danger! The reactor is melting! Danger!",
                 quoteStart: 16,
                 quoteText: "reactor",
@@ -273,21 +283,69 @@ describe("scribble.pub bot with Hono", () => {
         expect(seen).toHaveBeenCalledWith(undefined)
     })
 
-    it("accepts a replyTo whose message is gone, keeping the id but not the text", async () => {
+    it("delivers the author's userId, on the trigger and on replyTo alike", async () => {
         const bot = new ScribblePubBot({ token: TOKEN })
         const seen = vi.fn()
 
         bot.on("chat.addressed", (trigger) => {
-            seen(trigger.replyTo?.messageId, trigger.replyTo?.text)
+            seen(trigger.userId, trigger.replyTo?.userId)
             return []
         })
 
-        const payload = replyPayload({ replyTo: { messageId: 77, username: "TestBot" } })
+        const payload = hookPayload({
+            userId: "g7Ht2Vb0mR",
+            replyToMessageId: 4100,
+            replyTo: { messageId: 4100, username: "Mary", userId: "uVb7Ht2ZpN", text: "hi" },
+        })
 
         const res = await postHook(bot, JSON.stringify(payload))
 
         expect(res.status).toBe(200)
+        expect(seen).toHaveBeenCalledWith("g7Ht2Vb0mR", "uVb7Ht2ZpN")
+    })
+
+    it("rejects a chat trigger without a userId", async () => {
+        const bot = new ScribblePubBot({ token: TOKEN })
+        bot.on("hook", () => [])
+
+        const { userId, ...trigger } = hookPayload().trigger
+        const res = await postHook(bot, JSON.stringify({ trigger }))
+
+        expect(res.status).toBe(400)
+        expect((await res.json()).details).toEqual(
+            expect.arrayContaining([expect.objectContaining({ path: "trigger.userId" })]),
+        )
+    })
+
+    it("delivers a reply whose target is gone as an id with no replyTo", async () => {
+        const bot = new ScribblePubBot({ token: TOKEN })
+        const seen = vi.fn()
+
+        bot.on("chat.addressed", (trigger) => {
+            seen(trigger.replyToMessageId, trigger.replyTo)
+            return []
+        })
+
+        // Deleted, hidden, and expired parents look alike: the id survives, nothing else does.
+        const { replyTo, ...trigger } = replyPayload().trigger
+        const res = await postHook(bot, JSON.stringify({ trigger }))
+
+        expect(res.status).toBe(200)
         expect(seen).toHaveBeenCalledWith(77, undefined)
+    })
+
+    it("rejects a replyTo missing a field a live parent always has", async () => {
+        const bot = new ScribblePubBot({ token: TOKEN })
+        bot.on("hook", () => [])
+
+        const { text, ...replyTo } = replyPayload().trigger.replyTo as Record<string, unknown>
+        const payload = replyPayload({ replyTo } as Partial<ChatAddressedTrigger>)
+        const res = await postHook(bot, JSON.stringify(payload))
+
+        expect(res.status).toBe(400)
+        expect((await res.json()).details).toEqual(
+            expect.arrayContaining([expect.objectContaining({ path: "trigger.replyTo.text" })]),
+        )
     })
 
     it('does not send a supported trigger to the "unsupported" handler', async () => {

@@ -54,6 +54,37 @@ Every chat message has an ID that is **unique within its room's chat**, strictly
   - Never derive message counts from ID differences (`5100 - 5000` is events, not 100 messages).
   - Gaps don't mean much: deleted messages, hidden messages, and non-message activity all look identical.
 
+## Addressing a bot
+
+Bots only receive webhooks when explicitly addressed. There are two ways to address a bot:
+
+1. **Tag it at the start of a message.** Tags anywhere else are treated as plain text.
+2. **Reply to its message.** However, if the reply starts with a tag for a different bot, only the tagged bot receives the webhook.
+
+## Bots never trigger bots
+
+A message posted by a bot emits no hooks. Tagging or replying to a bot from another bot does nothing, and a bot never triggers itself.
+
+Bot-to-bot messages may become possible later as an explicit opt-in setting (similar to Telegram), but a bot triggering itself will remain impossible.
+
+## User IDs
+
+Every chat trigger and `replyTo` include a `userId` for their authors.
+
+- **Stable**: Usernames can change, but this ID cannot. Always key your per-user storage on `userId`, not the username.
+- **Author types**: The first letter shows the author type: `u` (registered user), `g` (guest), or `b` (bot). Treat the ID as a single string, and expect new prefix letters in the future.
+- **Guests are session-bound**: A guest's identity is tied to their session, so the same person can come back under a new ID.
+- **Length**: 10 characters today, but this is not part of the contract. Ensure your storage can accommodate longer IDs.
+- **Case-sensitive**: Always compare the whole string case-sensitively. Watch out for default database collations (like MySQL's `utf8mb4_general_ci`) that might silently treat `uAbC` and `uabc` as the same user.
+
+## Replies
+
+A reply always arrives with `replyToMessageId`, whatever became of the message it points at.
+
+The target itself arrives as `replyTo`, and only while it is still live. A deleted, hidden, or expired target is not described at all: the id comes alone.
+
+So whenever `replyTo` is present, everything it knows is present with it — `messageId`, `username`, `userId`, and `text`. Its remaining fields are optional in their own right: `localId` only for your bot's own messages, `quoteStart`/`quoteText` only when a fragment was quoted.
+
 ## Text offsets are runes
 
 Quote offsets (`quoteStart` and `quoteLength`) use **rune indices** (Unicode code points), not bytes or UTF-16 code

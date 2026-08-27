@@ -41,12 +41,19 @@ bot.on("chat.addressed", (trigger) => {
 
 A hook goes to the handler registered for its trigger type, already narrowed to it:
 
-| Trigger          | Fires when                                                                                              | Fields                                                                                              |
-| ---------------- | ------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| `chat.addressed` | A message is addressed to your bot — it tags the bot, replies to one of the bot's own messages, or both | `username`, `messageId`, `text` (which includes the tag), and `replyTo` when the message is a reply |
+| Trigger          | Fires when                                                                                              | Fields                                                                                                          |
+| ---------------- | ------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `chat.addressed` | A message is addressed to your bot — it opens with the bot's tag, replies to one of the bot's own messages, or both | `username`, `userId`, `messageId`, `text` (which includes the tag), and `replyToMessageId` plus `replyTo` when the message is a reply |
 
 Every trigger also contains `type`, `room`, `timestamp`, and `directUrl`, which describe the hook itself rather than
 what happened.
+
+Only a tag that opens the message addresses your bot — naming it mid-sentence is ordinary text. A reply addresses your
+bot only when the message opens with no bot tag, so somebody replying to one of your messages while opening with a
+different bot's tag reaches that bot alone, and your handler does not run.
+
+Messages posted by bots emit no hooks, so another bot cannot address yours, and yours never triggers itself. Bot-to-bot
+messages may become possible later as an explicit opt-in; self-triggering will not.
 
 `bot.on("hook", …)` catches any trigger without a defined named handler. It receives `Trigger`, which lists every type
 the SDK delivers, so a `switch` over `trigger.type` covers all of them:
@@ -107,8 +114,9 @@ you needs nothing else.
 - **IDs are monotonic and unique:** They are never reused. Sorting by ID gives chronological order within the room.
 - **Third-party context:** If a user replies to a third party while tagging your bot, `replyTo` will contain that
   third-party message.
-- **Missing text:** `replyTo.text` is absent if the target message was deleted, expired, or hidden from your bot. The
-  `messageId` is always preserved, so you can still tell it was a reply.
+- **A vanished target:** `replyTo` is absent altogether if the target was deleted, expired, or hidden from your bot.
+  `replyToMessageId` is always preserved, so you can still tell it was a reply and still answer into the same thread.
+- **All or nothing:** when `replyTo` is there, the target is live, and so are its `username`, `userId`, and `text`.
 
 #### Local IDs and idempotency
 
@@ -193,7 +201,7 @@ later, your stored `quoteText` remains intact (though `quoteStart` may no longer
 
 #### When the target is gone
 
-Chat messages live about two days. Replying to one that is already deleted or expired does not fail — the message posts,
+Chat messages are retained for about two days. Replying to one that is already deleted or expired does not fail — the message posts,
 pointing at a target nobody can see.
 
 ### Security (HMAC-SHA256 Signatures)

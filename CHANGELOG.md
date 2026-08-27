@@ -38,6 +38,10 @@ illusion of having a single, strictly synchronized, room state, which is not tru
   replies, or both).
   - Use `replyTo` to identify replies.
   - As before, the platform does not strip tags from `text`.
+  - **Only opening tags address a bot:** a tag anywhere else in the message is ordinary text.
+  - **Tags win over replies:** a reply addresses a bot only when the message opens with no bot tag, so replying to one
+    bot while opening with another's tag reaches the tagged one alone.
+  - **Bots never trigger bots:** messages posted by bots emit no hooks, and a bot never triggers itself.
   - **Bots on 0.3.0 will stop responding** until upgraded, because they drop unknown triggers.
 - **Legacy `trigger` discriminant removed:** The discriminant is now strictly `type` (matching `Action.type`). The old
   `trigger.trigger` spelling is completely gone.
@@ -57,15 +61,24 @@ illusion of having a single, strictly synchronized, room state, which is not tru
   body as the endpoint it replaces.
 - `GET /api/v0/room/{room}/scratchpad/preview` — the scratchpad canvas as a PNG at a 0.6px scale, with the same
   `Last-Modified` / `If-Modified-Since` handling as before.
+- **`userId` on chat triggers:** Every chat hook now identifies its author with a stable `userId`, alongside the display `username`.
+  - **Stable identity:** The username can change, but the ID does not. Key your per-user storage on the `userId`.
+  - **Author types:** The first letter indicates the author type: `u` (registered user), `g` (guest), or `b` (bot). Treat the ID as a single string, and expect new prefix letters in the future.
+  - **Guest sessions:** A guest's identity (`g...`) is tied to their browser session. If their session expires or they clear their cookies, they will return under a new guest ID.
+  - **Replies:** Also present on `replyTo` as the author of the parent message, next to its `username`.
 - **`messageId` on chat triggers:** Every chat hook now includes a `messageId`.
   - IDs are strictly monotonic, unique per room, and never reused. Sort by ID for chronological order.
   - IDs serve as the event counter, so they skip over non-message activity, deletions, and hidden messages. Do not use
     IDs to count messages.
-- **`replyTo` on chat triggers:** Provides the message being replied to (whether it targets your bot or someone else).
-  - Includes `messageId`, `username`, full `text` (unless deleted/hidden), and `quoteStart`/`quoteText` if a fragment
-    was quoted.
+- **`replyToMessageId` on chat triggers:** Present whenever the message is a reply, whatever became of its target. Use it to answer into the same thread.
+- **`replyTo` on chat triggers:** Provides the message being replied to (whether it targets your bot or someone else),
+  and only while that message is still live.
+  - Includes `messageId`, the author's `username` and `userId`, and the full `text`, plus `quoteStart`/`quoteText` if a
+    fragment was quoted.
   - Includes `localId` if your bot posted the message, allowing you to instantly recognize replies to yourself and look
     them up in a database.
+  - **Absent for a deleted, hidden, or expired target**, leaving `replyToMessageId` on its own. Its presence therefore
+    tells you the target is still readable, and that everything it knows arrived with it.
 - **`replyTo` on `chat.addMessage`:** Makes your outbound message a reply.
   - Provide either the target's `messageId` (it may also be your own message's public ID) or your own `localId` (not
     both).
@@ -235,13 +248,13 @@ New endpoints:
 Also:
 
 - Rooms are served by regional instances, such as `https://eu.scribble.pub` and `https://ap.scribble.pub`. A request to
-  an instance that does not host the room is answered with a `307` to the one that does. It carries a short-lived
+  an instance that does not host the room is answered with a `307` to the one that does. It includes a short-lived
   credential in the redirect link, so a client that simply follows redirects needs no extra work on e.g., preventing
   Authorization token stripping. Although general `https://scribble.pub/api` requests are supported, it's recommended to
   cache redirect base URLs to speed up next requests.
 - Hook payloads now contain the room's regional URL in `trigger.directUrl`, which lets a client save it into its cache
   and skip the future the redirects.
-- Errors carry a JSON body, `{"error": "Room is not found"}`.
+- Errors include a JSON body, `{"error": "Room is not found"}`.
 
 ### SDK
 
@@ -261,7 +274,7 @@ Also:
 - `bot.sendActions(room, actions)` — sends actions to the specified room, using the same body as the hook response.
 - Room-to-instance routing: `sendActions` remembers which regional instance serves each room, using `Trigger.directUrl`
   and the platform's redirects, so repeat calls go straight to the right instance.
-- `ScribblePubApiError`, carrying the HTTP `status` and the error message returned by the API in `body`.
+- `ScribblePubApiError`, containing the HTTP `status` and the error message returned by the API in `body`.
 - `ScribblePubValidationError`, thrown by `registerWebhook` and `sendActions` when their arguments fail validation
   locally.
 - `BotConfig.baseUrl`, for pointing the SDK at custom instances. Setting it also drops the built-in room-to-instance

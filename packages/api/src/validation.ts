@@ -25,15 +25,18 @@ const localIdField = z
 const chatFields = {
     ...baseFields,
     username: z.string(),
+    userId: z.string(),
     messageId: z.number(),
     text: z.string(),
 }
 
+// Only ever delivered for a live parent, so everything but the conditional fields is required.
 const RepliedMessageSchema = z.looseObject({
     messageId: z.number(),
     localId: localIdField,
     username: z.string(),
-    text: z.string().optional(),
+    userId: z.string(),
+    text: z.string(),
     quoteStart: z.number().int().min(0).optional(),
     quoteText: z.string().optional(),
 })
@@ -41,6 +44,7 @@ const RepliedMessageSchema = z.looseObject({
 const ChatAddressedTriggerSchema = z.looseObject({
     ...chatFields,
     type: z.literal("chat.addressed"),
+    replyToMessageId: z.number().optional(),
     replyTo: RepliedMessageSchema.optional(),
 })
 

@@ -49,6 +49,23 @@ export type ChatTriggerBase = TriggerBase & {
     username: string
 
     /**
+     * The ID of the user who triggered the hook.
+     *
+     * Unlike {@link ChatTriggerBase.username}, which its owner can change, this one is stable.
+     * Always key your per-user storage on this ID, not the username.
+     *
+     * The first letter indicates the author type: `u` (registered user), `g` (guest), or `b` (bot).
+     * Treat the ID as a single string, and expect new prefix letters in the future.
+     *
+     * A guest's identity is tied to their browser session. If their session expires, or they clear
+     * their cookies, they will return under a new guest ID.
+     *
+     * It is 10 characters long today, but this is not part of the contract. Ensure your storage
+     * can accommodate longer IDs. Always compare the whole string case-sensitively.
+     */
+    userId: string
+
+    /**
      * The room-global unique ID of the chat message that triggered the hook.
      *
      * Use it to reply to this message ({@link OutboundReplyTarget.messageId}), to record the message
@@ -63,13 +80,18 @@ export type ChatTriggerBase = TriggerBase & {
     /**
      * The text that triggered the hook.
      *
-     * When the message tags your bot, the tag is part of the text — the platform does not strip it.
+     * When the message opens with your bot's tag, the tag is part of the text — the platform does not strip it.
      */
     text: string
 }
 
 /**
- * The message a chat message is a reply to.
+ * The message a chat message is a reply to, delivered only while that message is still live.
+ *
+ * A parent message that was deleted, hidden, or expired is not described here at all: the reply then
+ * arrives with {@link ChatAddressedTrigger.replyToMessageId} alone. So whenever this object is
+ * present, everything it knows about the parent is present with it, and the optional fields below
+ * are optional for their own reasons rather than because the parent message is missing data.
  *
  * Quote offsets are **rune (Unicode code point) indices** into {@link RepliedMessage.text}.
  * JavaScript strings are indexed in UTF-16 code units instead, which differ for anything above
@@ -80,7 +102,8 @@ export type RepliedMessage = {
     /**
      * The room-global ID of the replied-to message. The same field as {@link ChatTriggerBase.messageId}.
      *
-     * Always present, even when the message itself is no longer available.
+     * Repeats {@link ChatAddressedTrigger.replyToMessageId} so this object identifies its own
+     * message wherever you pass or store it.
      */
     messageId: number
 
@@ -98,11 +121,15 @@ export type RepliedMessage = {
     username: string
 
     /**
-     * The full text of the replied-to message.
-     *
-     * Absent when the message is not available: it was deleted, or it expired.
+     * The ID of the author of the replied-to message. The same field as
+     * {@link ChatTriggerBase.userId}.
      */
-    text?: string | undefined
+    userId: string
+
+    /**
+     * The full text of the replied-to message.
+     */
+    text: string
 
     /**
      * The rune offset in {@link RepliedMessage.text} where the quoted fragment starts.
@@ -122,26 +149,44 @@ export type RepliedMessage = {
 }
 
 /**
- * A chat message addressed to your bot: it tags the bot (e.g., "@HelloBot"), replies to one of the
- * bot's own messages, or both.
+ * A chat message addressed to your bot: it opens with the bot's tag (e.g., "@HelloBot"), replies to
+ * one of the bot's own messages, or both.
  *
- * - **Replied to.** {@link ChatAddressedTrigger.replyTo} is present. It is your bot's own message
- *   when {@link RepliedMessage.localId} is set, or when {@link RepliedMessage.username} is your
- *   bot's name — otherwise the user replied to somebody else while tagging you.
- * - **Tagged.** The tag is part of {@link ChatTriggerBase.text}. Match it against your bot's own
- *   username.
+ * - **Replied to.** {@link ChatAddressedTrigger.replyToMessageId} is present. This could be a reply
+ *   to your bot's own message, or a reply to somebody else where the user also addressed your bot.
+ * - **Tagged.** The tag opens {@link ChatTriggerBase.text}. Match it against your bot's own username.
+ *
+ * Only an opening tag addresses a bot; naming one mid-sentence is ordinary text. A reply addresses
+ * only when the message opens with no bot tag, so a reply to your own message that opens with
+ * another bot's tag reaches that bot alone and never arrives here.
+ *
+ * Messages posted by bots emit no hooks: another bot cannot address yours, and yours never addresses itself.
+ * Bot-to-bot messages may become possible later as an explicit opt-in; self-triggering will not.
  */
 export type ChatAddressedTrigger = ChatTriggerBase & {
     type: "chat.addressed"
 
     /**
-     * The message this one replies to, if it is a reply at all.
+     * The room-global ID of the message this one replies to.
      *
-     * Present whether the reply targets one of your bot's messages or somebody else's — a user
-     * replying to a third party while tagging your bot ("@HelloBot what do you think about it?")
-     * delivers that third party's message here.
+     * Present whenever the message is a reply, whatever became of its target — this is the one part
+     * of a reply that always survives. Use it to reply into the same thread, and see
+     * {@link ChatAddressedTrigger.replyTo} for the target itself.
      *
      * Absent when the message is not a reply.
+     */
+    replyToMessageId?: number | undefined
+
+    /**
+     * The message this one replies to, while that message is still live.
+     *
+     * Present whether the reply targets one of your bot's messages or somebody else's — a user
+     * replying to a third party while addressing your bot ("@HelloBot what do you think about it?")
+     * delivers that third party's message here.
+     *
+     * Absent when the message is not a reply, and equally when its target has been deleted, hidden,
+     * or expired: {@link ChatAddressedTrigger.replyToMessageId} then arrives on its own. Its
+     * presence therefore tells you the target is still readable, not merely that this is a reply.
      */
     replyTo?: RepliedMessage | undefined
 }
