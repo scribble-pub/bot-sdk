@@ -9,9 +9,7 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 Because this package is also the reference implementation of the Bot API, each release provides API changes as well to
 help developing custom clients.
 
-## [0.4.0] - Unreleased
-
-> [!NOTE] Preliminary notes for a release that is still in progress. Everything here may still change.
+## [0.4.0]
 
 A massive breaking update. Once the server API is upgraded to 0.4.0, the old bots stop working. Read below for details.
 
