@@ -8,6 +8,11 @@ This package also serves as the official reference description for the canvas an
 Built on standard Web APIs (`Request` / `Response` / `crypto.subtle`), it runs natively in **Node.js, Cloudflare
 Workers, Deno, Bun, and Next.js Edge**.
 
+## Example bots
+
+- [Hello World](https://github.com/Vladiatro/scribble-pub-bots/tree/main/bots/hello-world): a primitive bot that that
+  answers whenever it is addressed. Shows how to operate with hooks, chat actions, replies, and quotes.
+
 ## Quick Start: Hooks
 
 > [!NOTE] Bot development is currently private. To allocate a bot and receive your secret token, please contact
