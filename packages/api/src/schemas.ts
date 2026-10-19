@@ -11,6 +11,51 @@ export const SUPPORTED_TRIGGER_TYPES = ["chat.addressed"] as const
  */
 export const MAX_LOCAL_ID = Number.MAX_SAFE_INTEGER
 
+/**
+ * The most actions a single request or hook response can contain.
+ */
+export const MAX_ACTIONS = 5000
+
+/**
+ * The largest size of a single request or hook response, in bytes of JSON.
+ */
+export const MAX_PAYLOAD_BYTES = 4 * 1024 * 1024
+
+/**
+ * The ID of the default foreground layer, `fg` in the UI. Every drawing session starts with it.
+ *
+ * People can't change or remove the default layers, so both their IDs are fixed. The IDs of their single frames are
+ * also fixed: draw on the foreground layer with `frameId: FOREGROUND_FRAME_ID`.
+ */
+export const FOREGROUND_LAYER_ID = 0
+
+/**
+ * The ID of the default background layer, `bg` in the UI, which lies right under {@link FOREGROUND_LAYER_ID}
+ * in a new session.
+ */
+export const BACKGROUND_LAYER_ID = 1
+
+/**
+ * The ID of the only frame of {@link FOREGROUND_LAYER_ID}.
+ */
+export const FOREGROUND_FRAME_ID = 0
+
+/**
+ * The ID of the only frame of {@link BACKGROUND_LAYER_ID}.
+ */
+export const BACKGROUND_FRAME_ID = 1
+
+/**
+ * How a layer plays its frames (https://scribble.pub/docs/animations#animation-modes):
+ *
+ * - `sequential`: in order, in a loop.
+ * - `random`: in a random order, different for every viewer.
+ * - `roll`: the frame selected by the room's last dice roll ({@link ScratchpadRollMessage}), the same for everyone.
+ *
+ * Expect more modes in the future.
+ */
+export type AnimationMode = "sequential" | "random" | "roll"
+
 export type SupportedTriggerType = (typeof SUPPORTED_TRIGGER_TYPES)[number]
 
 /**
@@ -306,11 +351,173 @@ export type AddMessagePayload = {
 export type AddMessageAction = { type: "chat.addMessage" } & AddMessagePayload
 
 /**
+ * Where a new layer goes among the others.
+ */
+export type LayerPosition = {
+    /**
+     * - `top`: above all other layers.
+     * - `bottom`: below all other layers, the background one included.
+     * - `above`, `below`: right next to the layer given by {@link LayerPosition.layerId} or
+     *   {@link LayerPosition.layerLocalId}, exactly one of them. If that layer is not there, the new one goes on top.
+     */
+    at: "top" | "bottom" | "above" | "below"
+
+    /**
+     * The global ID of any layer, e.g. {@link FOREGROUND_LAYER_ID} or one from {@link ScratchpadLayerMessage.layerId}.
+     */
+    layerId?: number | undefined
+
+    /**
+     * The {@link PutLayerPayload.localId} of one of your bot's own layers.
+     */
+    layerLocalId?: number | undefined
+}
+
+/**
+ * Creates your bot's layer or replaces the frames of the one it already has under the same `localId`.
+ *
+ * Putting a layer that already exists replaces only its {@link PutLayerPayload.frameLocalIds} (and
+ * {@link PutLayerPayload.animationMode}, if given):
+ *
+ * - **It keeps its place.** {@link PutLayerPayload.position} only places a new layer, so an update or a retry never
+ *   moves it. Layers can't be reordered, by bots or people.
+ * - **Retries are safe.** Sending the same `frameLocalIds` again changes nothing.
+ */
+export type PutLayerPayload = {
+    /**
+     * Your own ID for this layer, unique among your bot's layers in the room's drawing session.
+     *
+     * Required, as your own IDs identify everything you draw. Must not exceed {@link MAX_LOCAL_ID}.
+     */
+    localId: number
+
+    /**
+     * The frames of the layer, in the order they are played: your own IDs for them.
+     *
+     * - **New IDs create frames.** An ID the layer hasn't had yet makes a new, empty frame.
+     * - **Repeated IDs repeat frames.** `[1, 2, 1, 3]` shows frame 1 twice, the same as "Repeat frame" in the UI.
+     *   Frames are not copies: what is drawn on frame 1 shows on both of its ticks.
+     * - **Missing IDs remove frames.** A frame left out of a later put is removed together with its objects.
+     *   Using its ID again later creates a new, empty frame.
+     *
+     * Your frame IDs are unique across all your layers, so drawing on a frame takes only its ID, without the layer
+     * ({@link PutObjectPayload.frameLocalId}). Giving a layer an ID that another of your layers already has makes the
+     * whole action skipped (the SDK catches it within a request). Once a frame is removed, with its layer or left out of the program, its ID
+     * is free again.
+     *
+     * Must not be empty; use {@link RemoveLayerAction} to remove a layer.
+     */
+    frameLocalIds: number[]
+
+    /**
+     * How the layer plays its frames. Without it, a new layer is `sequential`, and an existing one keeps its mode.
+     */
+    animationMode?: AnimationMode | undefined
+
+    /**
+     * Where a new layer goes, e.g. `{at: "above", layerLocalId: 1}`. Without it, the layer goes on top of all others.
+     * Ignored if the layer already exists.
+     */
+    position?: LayerPosition | undefined
+}
+
+/**
+ * Creates your bot's layer or replaces its frames. See {@link PutLayerPayload}.
+ */
+export type PutLayerAction = { type: "sp.putLayer" } & PutLayerPayload
+
+/**
+ * Removes your bot's layer, together with its frames and everything drawn on them.
+ */
+export type RemoveLayerAction = {
+    type: "sp.removeLayer"
+
+    /**
+     * The {@link PutLayerPayload.localId} of the layer.
+     */
+    localId: number
+}
+
+/**
+ * Draws an object or replaces your bot's object with the same `localId`.
+ *
+ * The object fields are the same as in {@link ScratchpadObjectMessage}.
+ */
+export type PutObjectPayload = {
+    /**
+     * Your own ID for this object, unique among your bot's objects in the room's drawing session.
+     *
+     * - **Replacing.** Sending another object under the same ID replaces the old one in place, under the same
+     *   `objectId`. Onto another frame, it is drawn there as a new object.
+     * - **Stacking order.** A new object is drawn on top of its frame, so objects stack in the order you send them
+     *   (same as for people). A replacement keeps its place.
+     * - **Reusable after removal.** Once the object is removed, by your bot or anyone else, the ID draws a new one.
+     *
+     * Required. Must not exceed {@link MAX_LOCAL_ID}.
+     */
+    localId: number
+
+    /**
+     * The frame to draw on by its global ID: {@link FOREGROUND_FRAME_ID}, {@link BACKGROUND_FRAME_ID}, or any other
+     * layer's frame, as people can (e.g., from {@link ScratchpadLayerMessage.frames}).
+     *
+     * Give exactly one of `frameId` or {@link PutObjectPayload.frameLocalId}. If the frame is not there (e.g., its
+     * layer was removed), nothing is drawn.
+     */
+    frameId?: number | undefined
+
+    /**
+     * The frame to draw on by your bot's own ID for it, one of the {@link PutLayerPayload.frameLocalIds} of your
+     * layers. You don't need to give the layer: your frame IDs are unique across all your layers.
+     */
+    frameLocalId?: number | undefined
+} & ScratchpadObjectPayload
+
+/**
+ * Draws or replaces your bot's object. See {@link PutObjectPayload}.
+ */
+export type PutObjectAction = { type: "sp.putObject" } & PutObjectPayload
+
+/**
+ * Removes your bot's object.
+ */
+export type RemoveObjectAction = {
+    type: "sp.removeObject"
+
+    /**
+     * The {@link PutObjectPayload.localId} of the object.
+     */
+    localId: number
+}
+
+/**
+ * Cancels the whole drawing of the request (all its `sp.*` actions) unless the room is still on the drawing session
+ * your bot read, so a canvas clear since then doesn't put it into another drawing. The cancellation is silent. Chat
+ * actions are not affected.
+ *
+ * It must come before the other `sp.*` actions of the request.
+ */
+export type CheckSessionAction = {
+    type: "sp.checkSession"
+
+    /**
+     * The {@link ScratchpadSessionMetaMessage.currentSession} your bot read, e.g. `state.sessionMeta.currentSession`.
+     */
+    session: number
+}
+
+/**
  * A single operation your bot wants to perform in the room.
  * This is designed as a "Flat Discriminated Union", meaning the 'type' field
  * dictates which payload fields are required next to it.
  */
-export type Action = AddMessageAction
+export type Action =
+    | AddMessageAction
+    | CheckSessionAction
+    | PutLayerAction
+    | RemoveLayerAction
+    | PutObjectAction
+    | RemoveObjectAction
 
 /**
  * The JSON payload your bot server must return to scribble.pub.
@@ -346,6 +553,7 @@ export type ScratchpadMessage =
     | ScratchpadSessionMetaMessage
     | ScratchpadLayerMessage
     | ScratchpadSetLayerOrderMessage
+    | ScratchpadRollMessage
     | ScratchpadObjectMessage
     | ScratchpadLastEventIdMessage
 
@@ -404,6 +612,12 @@ export type ScratchpadSessionMetaMessage = {
      * The height of the room canvas. Every object coordinate is expressed in this space.
      */
     canvasHeight: number
+
+    /**
+     * How long each frame of the drawing's animations lasts, in milliseconds: 125 (8 frames per second) now, but 250
+     * for older drawings. It may change again, so take it from here rather than hardcoding it.
+     */
+    animationTickMs: number
 }
 
 /**
@@ -416,8 +630,8 @@ export type ScratchpadSessionMetaMessage = {
  * **Layers vs. Frames**:
  * - **Layers** define the top-level rendering z-index.
  * - **Frames** are a part of layers and contain the actual drawing objects.
- * At any single point in time, only one frame can be rendered per layer.
- * Currently, the server only provides 1 frame per layer (the static preview).
+ * At any single point in time, only one frame can be rendered per layer, picked by its
+ * {@link ScratchpadLayerMessage.animationMode}.
  *
  * The rendering order of the objects on a layer/frame is by `objectId`, ascending.
  *
@@ -440,17 +654,36 @@ export type ScratchpadLayerMessage = {
      * If a new frame ID arrives, it should be created in the state.
      * If a layer arrives with an empty `frames` array, it means the layer was deleted.
      *
-     * Currently, this only returns a single frame ID for the static preview.
-     * For most layers, this is the first frame. For layers in "Roll" mode
-     * (https://scribble.pub/docs/animations#animation-modes), the currently rolled frame ID is returned instead.
+     * This is the layer's frame program: one entry per tick, in the order they are played. A frame shown for several
+     * ticks (with "Repeat frame" in the UI) appears several times.
      */
     frames: number[]
+
+    /**
+     * How the layer plays its {@link ScratchpadLayerMessage.frames}.
+     * See more at https://scribble.pub/docs/animations#animation-modes.
+     */
+    animationMode: AnimationMode
 
     /**
      * The last ID of the event that created or modified this layer.
      * This is a shared counter across all scratchpad events in the room, within the session.
      */
     lastEventId: number
+
+    /**
+     * The {@link PutLayerPayload.localId} your bot gave this layer.
+     *
+     * Present only on your bot's own layers.
+     */
+    localId?: number | undefined
+
+    /**
+     * The IDs of the layer's frames by your bot's {@link PutLayerPayload.frameLocalIds} for them, e.g. `{"7": 103}`.
+     *
+     * Present only on your bot's own layers.
+     */
+    frameIdsByLocalId?: Record<number, number> | undefined
 }
 
 export type ScratchpadSetLayerOrderMessage = {
@@ -472,6 +705,22 @@ export type ScratchpadSetLayerOrderMessage = {
 }
 
 /**
+ * The room's last dice roll, a number from 0 (inclusive) to 1 (exclusive), which people make with `/roll` in the chat.
+ *
+ * Every layer in `roll` mode shows the frame at `frames[Math.floor(roll * frames.length)]`.
+ */
+export type ScratchpadRollMessage = {
+    type: "sp.roll"
+
+    roll: number
+
+    /**
+     * The ID of the event that made the roll. It is -1 in a state snapshot.
+     */
+    lastEventId: number
+}
+
+/**
  * Represents a drawn line on a frame.
  *
  * These messages are delivered in ascending `objectId` order,
@@ -479,6 +728,8 @@ export type ScratchpadSetLayerOrderMessage = {
  * Since this matches the rendering order within a frame,
  * you can safely append incoming objects to your local state without sorting them,
  * and you can immediately draw them on top of the frame canvas as they arrive.
+ *
+ * An object with an `objectId` you already have replaces that object in place: bots can replace their objects.
  *
  * Expect missed object IDs. Erased objects keep their IDs but are never delivered.
  *
@@ -504,6 +755,13 @@ export type ScratchpadObjectMessage = {
      * The ID of the event that last modified this object.
      */
     eventId: number
+
+    /**
+     * The {@link PutObjectPayload.localId} your bot gave this object.
+     *
+     * Present only on your bot's own objects, which lets a restarted bot find them again.
+     */
+    localId?: number | undefined
 } & ScratchpadObjectPayload
 
 export type ScratchpadObjectPayloadLineFloats = {
@@ -516,6 +774,8 @@ export type ScratchpadObjectPayloadLineFloats = {
      * Before 1.0, expect losing compatibility here.
      * It is planned to stop converting the lines to simplified format for precision and wire size efficiency.
      * The lines that are received as "line.floats" now will be received under a different type.
+     *
+     * This is also the format bots draw in ({@link PutObjectAction}), which is going to stay.
      */
     objectType: "line.floats"
 
@@ -537,6 +797,9 @@ export type ScratchpadObjectPayloadLineFloats = {
      *
      * Otherwise, the line should be drawn as a stroked line with the given width, round caps, and round joins.
      * (See https://developer.mozilla.org/en-US/docs/Web/API/CanvasRenderingContext2D/lineCap)
+     *
+     * When drawing, it must be between 0 and 100. Filled polygons and lines wider than 2.5 require the fill tool
+     * permission in the room, the same as for people.
      */
     lineWidth: number
 
@@ -545,6 +808,8 @@ export type ScratchpadObjectPayloadLineFloats = {
      *
      * If there are fewer than 4 coordinates, the line should be drawn as a filled circle of radius `lineWidth / 2` around `[x1, y1]`.
      * It's worth explicitly handling this case because many APIs/libraries omit calls to moveTo/lineTo on the same point even with `lineCap` set to `"round"`.
+     *
+     * When drawing, it must contain from 1 to 2000 `[x, y]` pairs of finite numbers.
      */
     points: number[]
 }

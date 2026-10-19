@@ -1,11 +1,13 @@
 import { z } from "zod"
-import type {
-    Action,
-    HookRequest,
-    HookResponse,
-    IncomingTrigger,
-    RegisterWebhookPayload,
-    SupportedTriggerType,
+import {
+    type Action,
+    type HookRequest,
+    type HookResponse,
+    type IncomingTrigger,
+    MAX_ACTIONS,
+    MAX_PAYLOAD_BYTES,
+    type RegisterWebhookPayload,
+    type SupportedTriggerType,
 } from "./schemas.js"
 
 const baseFields = {
@@ -114,15 +116,160 @@ const ReplyTargetSchema = z
         }
     })
 
-const ActionSchema: z.ZodType<Action> = z.looseObject({
+const AddMessageActionSchema = z.looseObject({
     type: z.literal("chat.addMessage"),
     text: z.string(),
     localId: localIdField,
     replyTo: ReplyTargetSchema.optional(),
 })
 
+// Unlike in chat, a drawing is identified by its local ID, so it is required and can't be 0.
+const drawingLocalIdField = z.number().int().min(1)
+
+const LayerPositionSchema = z
+    .looseObject({
+        at: z.enum(["top", "bottom", "above", "below"]),
+        layerId: z.number().int().min(0).optional(),
+        layerLocalId: drawingLocalIdField.optional(),
+    })
+    .superRefine((position, ctx) => {
+        const layers =
+            (position.layerId !== undefined ? 1 : 0) + (position.layerLocalId !== undefined ? 1 : 0)
+        if (position.at === "top" || position.at === "bottom") {
+            if (layers > 0) {
+                ctx.addIssue({
+                    code: "custom",
+                    path: ["at"],
+                    message: `position at ${position.at} takes no layer`,
+                })
+            }
+        } else if (layers !== 1) {
+            ctx.addIssue({
+                code: "custom",
+                path: ["layerId"],
+                message: `position ${position.at} takes exactly one of layerId or layerLocalId`,
+            })
+        }
+    })
+
+const PutLayerActionSchema = z.looseObject({
+    type: z.literal("sp.putLayer"),
+    localId: drawingLocalIdField,
+    frameLocalIds: z.array(drawingLocalIdField).min(1).max(256),
+    animationMode: z.enum(["sequential", "random", "roll"]).optional(),
+    position: LayerPositionSchema.optional(),
+})
+
+const RemoveLayerActionSchema = z.looseObject({
+    type: z.literal("sp.removeLayer"),
+    localId: drawingLocalIdField,
+})
+
+const PutObjectActionSchema = z
+    .looseObject({
+        type: z.literal("sp.putObject"),
+        localId: drawingLocalIdField,
+        frameId: z.number().int().min(0).optional(),
+        frameLocalId: drawingLocalIdField.optional(),
+        objectType: z.literal("line.floats"),
+        rgba: z.number().int().min(0).max(0xffffffff),
+        lineWidth: z.number().min(0).max(100),
+        points: z
+            .array(z.number())
+            .min(2)
+            .max(4000)
+            .refine((points) => points.length % 2 === 0, {
+                message: "points must hold [x, y] pairs",
+            }),
+    })
+    .superRefine((action, ctx) => {
+        if ((action.frameId === undefined) === (action.frameLocalId === undefined)) {
+            ctx.addIssue({
+                code: "custom",
+                path: ["frameId"],
+                message: "give exactly one of frameId or frameLocalId",
+            })
+        }
+    })
+
+const RemoveObjectActionSchema = z.looseObject({
+    type: z.literal("sp.removeObject"),
+    localId: drawingLocalIdField,
+})
+
+const CheckSessionActionSchema = z.looseObject({
+    type: z.literal("sp.checkSession"),
+    session: z.number().int().positive(),
+})
+
+const ActionSchema: z.ZodType<Action> = z.discriminatedUnion("type", [
+    AddMessageActionSchema,
+    CheckSessionActionSchema,
+    PutLayerActionSchema,
+    RemoveLayerActionSchema,
+    PutObjectActionSchema,
+    RemoveObjectActionSchema,
+])
+
+// A frame local ID belongs to a single layer of the bot. Within a request, giving it to another layer is caught
+// here; against the layers of earlier requests, only the server can tell, and it skips such an action.
+function checkFrameOwners(actions: Action[], ctx: z.RefinementCtx): void {
+    const owners = new Map<number, number>()
+    const free = (layerLocalId: number) => {
+        for (const [frameLocalId, owner] of owners) {
+            if (owner === layerLocalId) {
+                owners.delete(frameLocalId)
+            }
+        }
+    }
+    actions.forEach((action, i) => {
+        if (action.type === "sp.removeLayer") {
+            free(action.localId)
+        }
+        if (action.type !== "sp.putLayer") {
+            return
+        }
+        const clash = action.frameLocalIds.find((frameLocalId) => {
+            const owner = owners.get(frameLocalId)
+            return owner !== undefined && owner !== action.localId
+        })
+        if (clash !== undefined) {
+            ctx.addIssue({
+                code: "custom",
+                path: [i, "frameLocalIds"],
+                message: `frame ${clash} belongs to layer ${owners.get(clash)}: a frame local ID can't be in two layers`,
+            })
+            return
+        }
+        free(action.localId)
+        for (const frameLocalId of action.frameLocalIds) {
+            owners.set(frameLocalId, action.localId)
+        }
+    })
+}
+
+// A drawing is applied all at once, so a check anywhere but first would only let the actions before it through.
+function checkSessionFirst(actions: Action[], ctx: z.RefinementCtx): void {
+    const drawing = actions
+        .map((action, i) => ({ action, i }))
+        .filter(({ action }) => action.type.startsWith("sp."))
+    for (const { action, i } of drawing.slice(1)) {
+        if (action.type === "sp.checkSession") {
+            ctx.addIssue({
+                code: "custom",
+                path: [i, "type"],
+                message: "sp.checkSession must come before the other sp.* actions",
+            })
+        }
+    }
+}
+
 const HookResponseSchema: z.ZodType<HookResponse> = z.looseObject({
-    actions: z.array(ActionSchema),
+    actions: z
+        .array(ActionSchema)
+        .max(MAX_ACTIONS)
+        .superRefine(checkFrameOwners)
+        .superRefine(checkSessionFirst),
 })
 
 /**
@@ -172,7 +319,13 @@ export function parseHookResponse(
     actions: unknown,
 ): { success: true; data: HookResponse } | { success: false; errors: ValidationError[] } {
     const result = HookResponseSchema.safeParse({ actions })
-    return result.success
-        ? { success: true, data: result.data }
-        : { success: false, errors: toValidationErrors(result.error.issues) }
+    if (!result.success) {
+        return { success: false, errors: toValidationErrors(result.error.issues) }
+    }
+    const bytes = new TextEncoder().encode(JSON.stringify(result.data)).length
+    if (bytes > MAX_PAYLOAD_BYTES) {
+        const message = `the actions take ${bytes} bytes of JSON, more than ${MAX_PAYLOAD_BYTES}`
+        return { success: false, errors: [{ path: "actions", message }] }
+    }
+    return { success: true, data: result.data }
 }

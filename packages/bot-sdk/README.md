@@ -429,8 +429,22 @@ When building your bot's state and rendering logic, you must understand the diff
 At any single point in time, only one frame can be rendered per layer. This is why layer z-index and frame z-index mean
 the same.
 
-To simplify rollout, the bot server currently provides only one frame per layer, but your bot must be structurally ready
-to accept more, i.e., keep layer frames as a map or an array, not as a single object.
+Every layer comes with its whole animation: `frames` is its frame program, one frame ID per tick in the order they are
+played (a repeated frame appears several times), and `animationMode` says how it is played. Each frame lasts
+`sessionMeta.animationTickMs`: 125 ms now, but 250 ms in older drawings. `ScratchpadState.visibleFrameId` picks the
+frame viewers see at a given time:
+
+```typescript
+const state = await bot.getScratchpadState("main");
+for (const layerId of state.layerOrder) {
+    const frame = state.frames.get(state.visibleFrameId(layerId)!);
+    // Draw frame.objects, bottom to top.
+}
+```
+
+- **`sequential`** layers loop on a clock shared by all viewers, so everyone sees the same frame.
+- **`roll`** layers show the frame selected by the room's last dice roll (`sp.roll`, `state.roll`).
+- **`random`** layers show every viewer random frames of their own.
 
 For a user-facing explanation of layers and animation frames, see
 [scribble.pub/docs/animations](https://scribble.pub/docs/animations).
@@ -454,6 +468,214 @@ import {rgbaToHex, rgbaToComponents} from "@scribble-pub/bot-sdk";
 ctx.strokeStyle = rgbaToHex(object.rgba); // "#dbffb9ff"
 const {r, g, b, a} = rgbaToComponents(object.rgba);
 ```
+
+## Drawing
+
+Bots draw on frames of layers, like people do (see [Concepts: Layers vs. Frames](#concepts-layers-vs-frames)), but in
+a simpler format: `line.floats`, with plain canvas coordinates.
+
+```typescript
+import {FOREGROUND_FRAME_ID} from "@scribble-pub/bot-sdk";
+
+bot.on("chat.addressed", () => [
+    {
+        type: "sp.putObject",
+        localId: 1,
+        frameId: FOREGROUND_FRAME_ID,
+        objectType: "line.floats",
+        rgba: 0xff0000ff, // opaque red
+        lineWidth: 2,
+        points: [100, 100, 300, 250],
+    },
+]);
+```
+
+The object fields (`objectType`, `rgba`, `lineWidth`, `points`) are the same as in the `sp.object` messages of the
+[state](#state-management). People's lines are converted to this format for reading, though, and a line drawn at extreme
+zoom may need more precision than plain floats have.
+
+| Action            | Does                                                                         |
+|-------------------|------------------------------------------------------------------------------|
+| `sp.putObject`    | Draws an object, or replaces your object with the same `localId`             |
+| `sp.removeObject` | Removes your object                                                          |
+| `sp.putLayer`     | Creates your layer, or replaces its frames if it already exists              |
+| `sp.removeLayer`  | Removes your layer, with its frames and everything drawn on them             |
+| `sp.checkSession` | Cancels the request's drawing if the canvas was cleared since you read it    |
+
+### Local IDs only
+
+Drawing is fully **fire-and-forget**: your bot specifies everything by the IDs it gave it itself, the `localId`s, and
+never has to wait for a response to learn a global ID.
+
+- **Required:** every layer, frame, and object your bot draws has a local ID, from 1 to `MAX_LOCAL_ID`.
+- **Scoped by your bot:** another bot's local layer 4 is not yours. Layers, frames, and objects each have their own
+  IDs, so your layer 1 and your frame 1 are different things.
+- **Scoped by the drawing session:** a canvas clear removes everything, and the IDs start over.
+- **Draw anywhere, change only your own:** like people, a bot can draw on any layer's frame, named by its global
+  `frameId` from the state; its own frames can also be named by `frameLocalId`. But it can't change or remove anything
+  it didn't draw. Its objects on someone else's layer stay their own and go away with that layer or frame.
+
+The default layers are the two every drawing starts with, `fg` and `bg` in the UI. People can't change or remove them,
+so their IDs are fixed: `FOREGROUND_LAYER_ID` and `BACKGROUND_LAYER_ID`. The IDs of their single frames are also fixed:
+`frameId: FOREGROUND_FRAME_ID` and `frameId: BACKGROUND_FRAME_ID`.
+
+> [!NOTE] Moderators can remove your bot's objects and layers.
+
+### Replacing and removing objects
+
+`sp.putObject` with a `localId` your bot already used **replaces** that object. It suits anything that changes as
+the room plays, like a score bar or a game piece:
+
+```typescript
+const SCOREBOARD = 1; // the layer and its single frame
+const SCORE_BAR = 1;
+let score = 0;
+
+bot.on("chat.addressed", (trigger) => {
+    if (trigger.text.includes("point")) {
+        score++;
+    }
+    return [
+        // Creates the layer on the first run, and changes nothing afterwards.
+        {type: "sp.putLayer", localId: SCOREBOARD, frameLocalIds: [SCOREBOARD]},
+        {
+            type: "sp.putObject",
+            localId: SCORE_BAR,
+            frameLocalId: SCOREBOARD,
+            objectType: "line.floats",
+            rgba: 0x00aa00ff,
+            lineWidth: 2.5,
+            points: [20, 20, 20 + 10 * score, 20],
+        },
+    ];
+});
+```
+
+- **A replacement keeps its place.** It stays under the same `objectId`, among the same objects of the frame. Onto
+  another frame, it is drawn there as a new object.
+- **Removal frees the ID.** After `sp.removeObject` (or anybody else removing the object), the same `localId` draws a
+  new object.
+- **Respect viewers' devices.** Each replacement makes every viewer redraw the layer, which costs more
+  than drawing a new one. Keep frequent changes modest, and on a layer of your own, away from people's drawing.
+- **Bots don't keep a room active.** Their drawing doesn't reset the inactivity timer (if set in the room), so a room
+that clears after inactivity still clears while a bot draws.
+
+Like people's, your objects stack in the order they are drawn: a new object goes on top of its frame, whatever its
+`localId`, and the actions of a request are applied in order. To draw something under what is already there, use a
+layer below.
+
+Actions referring to non-existing objects, frames, or layers are **silently skipped**: your bot can't always know what
+happened in the room since it sent them. The rest of the actions are still applied.
+
+### Atomicity
+
+The drawing actions of a request are applied together, in order, and nothing else happens in the room in between: not a
+person's line, and not a canvas clear. So they all land in the same drawing session. A few things are not
+all-or-nothing, though:
+
+- **Missing targets are skipped**, as described above, and the rest of the actions still apply.
+- **A full canvas refuses new objects**, as it does people's. It is checked once, before your request, so a request
+  that starts on a canvas that isn't full is drawn whole, even past the limit. On a full one, only replacements are.
+- **Chat actions are separate.** The chat is another app, so a request's chat actions are applied after its drawing,
+  whatever happened to it.
+- **A large drawing may build up.** It reaches viewers in parts of up to about 256 KB, so a viewer can briefly see a
+  part of it.
+
+Between requests, the canvas may be cleared. A request is applied to whatever drawing the room is on when it arrives,
+so a bot that read the state and drew a moment later may draw into a fresh canvas. To prevent that, you can start
+the drawing with `sp.checkSession`: if the room is no longer on the session you read, the request's whole drawing
+is silently canceled.
+
+```typescript
+const state = await bot.getScratchpadState("main");
+await bot.sendActions("main", [
+    {type: "sp.checkSession", session: state.sessionMeta!.currentSession},
+    ...drawingBasedOn(state),
+]);
+```
+
+`sp.checkSession` must come before the other `sp.*` actions of the request, and it doesn't affect chat actions.
+
+### Layers and frames
+
+`sp.putLayer` creates your layer with the frames listed in `frameLocalIds`, in the order they are played:
+
+```typescript
+[
+    // A new layer right under the foreground one, with a 3-tick animation: 1, 2, and 1 again.
+    {type: "sp.putLayer", localId: 1, frameLocalIds: [1, 2, 1], position: {at: "below", layerId: FOREGROUND_LAYER_ID}},
+    {type: "sp.putObject", localId: 1, frameLocalId: 1, ...ballUp},
+    {type: "sp.putObject", localId: 2, frameLocalId: 2, ...ballDown},
+];
+```
+
+`frameLocalIds` is the same frame program people build in the UI:
+
+- **New IDs create frames.** An ID the layer hasn't had yet makes a new empty frame. There is no separate action to
+  create a frame, so you can declare frames and draw on them in one go.
+- **Repeated IDs repeat frames**, like "Repeat frame" in the UI. A repeated frame is not a copy: what you draw on it
+  shows on each of its ticks.
+- **Putting it again replaces the program.** Frames left out are removed together with their objects. If their IDs come
+  back later, they create new, empty frames.
+- **Frame IDs are unique across your layers.** As with the platform's frame IDs, two of your layers can't share a
+  frame ID, so `sp.putObject` takes only `frameLocalId`, without the layer. A layer can repeat its own frames, but
+  giving it a frame of another layer skips the whole `sp.putLayer` (`sendActions` catches it within one request).
+  Once a frame is removed, with its layer or left out of the program, its ID is free again.
+
+A layer plays its frames in `animationMode`: `sequential` (by default), `random`, or `roll`, which shows the frame of
+the room's last dice roll, as in the UI.
+
+`position` places a new layer: at the `top` (by default) or the `bottom` of all layers, or `above` or `below` another
+one, by its local ID if it's your own (`{at: "above", layerLocalId: 1}`) or by its global ID if not
+(`{at: "below", layerId: FOREGROUND_LAYER_ID}`).
+Next to a layer that is no longer there, the layer goes on top.
+
+Putting a layer that already exists replaces only its frame program, and its `animationMode` if given:
+
+- **It keeps its place.** `position` only places a new layer, so updates and retries never move it. Layers can't be
+  reordered, by bots or people.
+
+Each frame lasts `sessionMeta.animationTickMs` (see [Concepts: Layers vs. Frames](#concepts-layers-vs-frames)), which is
+currently fixed to 125 ms unless it's an old gallery drawing. Read more about how frames and layers loop 
+in the [animation guide](https://scribble.pub/docs/animations).
+
+### Finding your drawing again
+
+In the [state](#state-management), your bot's own layers and objects contain the local IDs it gave them: `localId` on
+`sp.layer` and `sp.object`. `frames` stays the program of global frame IDs, as for any layer, and `frameIdsByLocalId`
+maps your frame IDs to them. `ScratchpadState` indexes all of them (`ownLayers`, `ownFrames`, `ownObjects`), so a bot
+that restarted with no memory can tell what it has already drawn:
+
+```typescript
+const state = await bot.getScratchpadState("main");
+if (!state.ownObjects.has(SCORE_BAR)) {
+    // Draw the scoreboard.
+}
+```
+
+The same works for a bot that only ever adds objects, like a guestbook: it doesn't need to keep a counter, as the next
+free local ID is in the state.
+
+```typescript
+const state = await bot.getScratchpadState("main");
+const localId = Math.max(0, ...state.ownObjects.keys()) + 1;
+```
+
+Two requests that read the same state get the same ID, and the later one replaces the earlier one's object.
+
+Other bots' local IDs are never shown.
+
+### Permissions and limits
+
+- Drawing requires the drawing permission in the room. Filled polygons (`lineWidth: 0`) and lines wider than 2.5
+  require the fill tool permission, as they do for people. Without them, the whole request fails with `403` and nothing
+  is drawn.
+- `lineWidth` is from 0 to 100, and an object has from 1 to 2000 points.
+- A layer has at most 256 entries in `frameLocalIds`.
+- Like for people, drawing stops when the canvas is full (see [Atomicity](#atomicity)).
+- A request or hook response has at most `MAX_ACTIONS` (5000) actions and `MAX_PAYLOAD_BYTES` (4 MB) of JSON. The
+  SDK checks both before sending; the platform rejects a larger request with `400` or `413`. Split a larger drawing
+  into several requests.
 
 ## The scratchpad preview
 
@@ -552,5 +774,5 @@ unrecognized fields or message types.** Do not use strict JSON validation (e.g.,
 keys, or your bot will crash when new features are released.
 
 > [!WARNING] According to current plans, before 1.0, the `line.floats` object type will remain only for simple points
-> and lines provided by bots. Complex user-drawn lines will be sent in a more efficient, high-precision format, similar
-> to the one that is used for UI-server communication.
+> and lines provided by bots, which is also the format bots [draw](#drawing) in. Complex user-drawn lines will be sent
+> in a more efficient, high-precision format, similar to the one that is used for UI-server communication.

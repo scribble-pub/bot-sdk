@@ -13,12 +13,14 @@ const meta = (currentSession: number, eventId = 1): ScratchpadSessionMetaMessage
     seqId: 100,
     canvasWidth: 1000,
     canvasHeight: 700,
+    animationTickMs: 125,
 })
 
 const layer = (layerId: number, frames: number[], lastEventId: number): ScratchpadLayerMessage => ({
     type: "sp.layer",
     layerId,
     frames,
+    animationMode: "sequential",
     lastEventId,
 })
 
@@ -172,5 +174,67 @@ describe("RoomState", () => {
 
         expect(state.scratchpad.objects.size).toBe(1)
         expect(state.scratchpad.lastEventId).toBe(3)
+    })
+
+    it("indexes the bot's own layers and objects by their local IDs", () => {
+        const state = ScratchpadState.fromMessages([
+            meta(1),
+            layer(0, [0], 2),
+            { ...layer(10, [100, 101, 100], 3), localId: 1, frameIdsByLocalId: { 5: 100, 6: 101 } },
+            object(1, 0, 4),
+            { ...object(2, 100, 5), localId: 7 },
+        ])
+
+        expect(state.ownLayers.get(1)?.layerId).toBe(10)
+        expect(state.ownLayers.get(1)?.frames).toEqual([100, 101, 100])
+        expect(state.ownFrames.get(5)?.frameId).toBe(100)
+        expect(state.ownFrames.get(6)?.frameId).toBe(101)
+        expect([...state.ownObjects.keys()]).toEqual([7])
+
+        // A replacement arrives under the same objectId, in place.
+        state.applyMessage({ ...object(2, 100, 6), localId: 7, points: [1, 2] })
+        expect(state.ownObjects.get(7)?.points).toEqual([1, 2])
+        expect(state.frames.get(100)?.objects.length).toBe(1)
+
+        // Frame 6 is dropped, and frame 7 comes.
+        state.applyMessage({
+            ...layer(10, [100, 102], 9),
+            localId: 1,
+            frameIdsByLocalId: { 5: 100, 7: 102 },
+        })
+        expect([...state.ownFrames.keys()].sort()).toEqual([5, 7])
+
+        state.applyMessage(layer(10, [], 10))
+        expect(state.ownLayers.size).toBe(0)
+        expect(state.ownFrames.size).toBe(0)
+        expect(state.ownObjects.size).toBe(0)
+    })
+
+    it("picks the frame viewers see in every animation mode", () => {
+        const state = ScratchpadState.fromMessages([
+            meta(1),
+            layer(1, [10, 11, 10, 12], 2),
+            { ...layer(2, [20, 21], 3), animationMode: "roll" },
+            { ...layer(3, [30, 31, 32], 4), animationMode: "random" },
+            { type: "sp.roll", roll: 0.75, lastEventId: -1 },
+        ])
+
+        expect(state.roll).toBe(0.75)
+        expect(state.frames.size).toBe(8)
+        expect([0, 1, 2, 3, 4].map((tick) => state.visibleFrameId(1, tick * 125))).toEqual([
+            10, 11, 10, 12, 10,
+        ])
+        // The ticks start over every 15 minutes: 7200 ticks, not a multiple of 7.
+        const sevens = ScratchpadState.fromMessages([meta(1), layer(1, [0, 1, 2, 3, 4, 5, 6], 2)])
+        expect(sevens.visibleFrameId(1, 7200 * 125)).toBe(0)
+        // An older drawing plays at 250 ms a frame.
+        const old = ScratchpadState.fromMessages([
+            { ...meta(1), animationTickMs: 250 },
+            layer(1, [10, 11], 2),
+        ])
+        expect([0, 125, 250].map((time) => old.visibleFrameId(1, time))).toEqual([10, 10, 11])
+        expect(state.visibleFrameId(2)).toBe(21)
+        expect(state.visibleFrameId(3, 0, 0.5)).toBe(31)
+        expect(state.visibleFrameId(404)).toBeUndefined()
     })
 })

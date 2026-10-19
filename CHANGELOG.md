@@ -9,6 +9,82 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 Because this package is also the reference implementation of the Bot API, each release provides API changes as well to
 help developing custom clients.
 
+## [0.5.0]
+
+**Bots can draw.** A bot can draw lines on any layer, create its own layers, animate them with frames, and
+replace or remove what it has drawn. Everything is identified by the bot's own local IDs, so drawing is currently fully
+fire-and-forget. See [Drawing](packages/bot-sdk/README.md#drawing) for the guide.
+
+### Server API
+
+#### Breaking
+
+- **`sp.layer` now sends animations.** `frames` is the layer's frame program, one frame ID per tick (repeated
+  frames appear several times), and the state contains the objects of all these frames. Before, it was a single frame:
+  the first one, or the rolled one for layers in Roll mode, which is now `frames[Math.floor(roll * frames.length)]`.
+
+#### New
+
+- **Animations in the state:**
+  - `animationMode` on `sp.layer`: `sequential`, `random`, or `roll`.
+  - `sp.roll`, the room's last dice roll, which picks the frames of `roll` layers. It comes after `sp.layerOrder`.
+
+- **Drawing actions**, accepted by `POST /api/v0/room/{room}/actions` and in hook responses:
+  - `sp.putObject` — draws a `line.floats` object (the same fields as `sp.object`: `objectType`, `rgba`, `lineWidth`,
+    `points`) on top of a frame, or replaces the bot's object with the same `localId`. A replacement keeps its place
+    under the same `objectId`; onto another frame, it is drawn there as a new object.
+  - `sp.removeObject` — removes the bot's object by its `localId`.
+  - `sp.putLayer` — creates the bot's layer with the frame program given in `frameLocalIds`, or replaces the program
+    of an existing one. New frame local IDs create frames, repeated ones repeat frames, and frames left out are removed
+    with their objects. A new layer goes at the `position` given (`top`, `bottom`, or `above` or `below` a given layer),
+    or on top; an existing one keeps its place.
+    A frame local ID belongs to a single layer of the bot: giving one of the other layers skips the action.
+    `animationMode` sets how the layer plays: `sequential` (the default for a new layer), `random`, or `roll`.
+  - `sp.removeLayer` — removes the bot's layer with its frames and objects.
+  - `sp.checkSession` — cancels the request's whole drawing, silently, unless the room is still on the given
+    `currentSession`, e.g., after a canvas clear. It must come before the other `sp.*` actions.
+- **Atomic requests:** a request's drawing actions are applied together, in order, with nothing else in between, so
+  they all land in the same drawing session.
+- **Local IDs identify the whole drawing.** They are required on all drawing actions (from 1 to `MAX_LOCAL_ID`),
+  scoped by the bot and the drawing session.
+  - A frame to draw on is either `frameLocalId`, the bot's own ID for it, or `frameId`, its global ID: `0` and `1` for
+    the default layers' frames, or any other layer's frame, as people can.
+  - A layer to put a new one `above` or `below` is either `layerId`, the global ID of any layer, or `layerLocalId` for
+    the bot's own one.
+  - Global IDs name anything in the room; only the bot's own things can be changed or removed.
+- **Missing targets are skipped.** Removing something that doesn't exist, or drawing on a frame of a removed layer,
+  does nothing, and the rest of the actions still apply.
+- **Permissions:** drawing requires the drawing permission in the room, and filled polygons (`lineWidth` 0) or lines
+  wider than 2.5 require the fill tool permission. Without them, the request fails with `403` before anything is drawn.
+- **No inactivity reset:** bot drawing doesn't keep a room active, so a bot can't keep a room from being cleared for
+  inactivity.
+- **Limits:** `lineWidth` from 0 to 100, from 1 to 2000 points per object, and up to 256 entries in `frameLocalIds`.
+  A request or hook response has at most `MAX_ACTIONS` (5000) actions and `MAX_PAYLOAD_BYTES` (4 MB) of JSON, checked
+  by the SDK before sending.
+- **Own local IDs in the state:** `sp.layer` contains the bot's `localId` and `frameIdsByLocalId` (its frame local
+  IDs to the global ones in `frames`) for its own layers, and `sp.object` its `localId` for its own objects. Other
+  bots' local IDs are never shown.
+
+### SDK
+
+#### Added
+
+- Drawing actions in `Action`: `PutObjectAction`, `RemoveObjectAction`, `PutLayerAction`, and `RemoveLayerAction`,
+  with `PutObjectPayload`, `PutLayerPayload`, and `LayerPosition`. They are validated locally like chat actions.
+- `FOREGROUND_LAYER_ID` and `BACKGROUND_LAYER_ID`, the fixed IDs of the default layers, and
+  `FOREGROUND_FRAME_ID` and `BACKGROUND_FRAME_ID`, the fixed IDs of their frames.
+- `MAX_ACTIONS` and `MAX_PAYLOAD_BYTES`.
+- `ScratchpadState.ownLayers` and `ScratchpadState.ownObjects`: the bot's own layers and objects keyed by their local
+  IDs, so a restarted bot can find what it has drawn.
+- `localId` and `frameIdsByLocalId` on `ScratchpadLayer`, and `localId` on `ScratchpadObject`.
+- `CheckSessionAction`.
+- `ScratchpadState.ownFrames`: the bot's own frames keyed by their local IDs.
+- Animations: `animationMode` on `ScratchpadLayer` (`AnimationMode`), `ScratchpadState.roll` (from
+  `ScratchpadRollMessage`), `ScratchpadState.visibleFrameId`, which picks the frame viewers see on a layer at a given
+  time, using the new `animationTickMs` of `ScratchpadSessionMetaMessage` (125 ms, or 250 ms for older drawings).
+- `ScratchpadLayerMessage`, `ScratchpadObjectMessage`, `ScratchpadObjectPayload`, and
+  `ScratchpadObjectPayloadLineFloats` are now exported from `@scribble-pub/bot-sdk` as well.
+
 ## [0.4.0]
 
 A massive breaking update. Once the server API is upgraded to 0.4.0, the old bots stop working. Read below for details.
@@ -164,7 +240,7 @@ we decided just to drop other things that would otherwise be just deprecated.
 
 **Package split**: The package is split into two: `@scribble-pub/api` and `@scribble-pub/bot-sdk`.
 
-- `@scribble-pub/api` defines the protocol itself: messages, their Zod parsers and the signature. It also includes
+- `@scribble-pub/api` defines the protocol itself: messages, their Zod parsers, and the signature. It also includes
   `ScribblePubClient`, a thin one-method-per-endpoint HTTP client returning raw responses.
 - `@scribble-pub/bot-sdk` is the reference implementation of how this protocol should be used, how the canvas state is
   built from the messages, edge cases, room host server caching, etc.
@@ -281,7 +357,7 @@ Also:
 - `ErrorResponse`, the `{ "error": string }` body the API returns with a non-2xx status.
 - `packages/bot-sdk/src/schemas.ts` now holds nothing but the wire types, so it now better serves as the Server API
   definition  
-  and can be read by human, script or an agent. Zod and the parsers moved to
+  and can be read by human, script, or an agent. Zod and the parsers moved to
   `packages/bot-sdk/src/internal/validation.ts`, with `ValidationError` still exported from the package root.
 
 ## [0.1.0]

@@ -2,8 +2,16 @@ import { createServer } from "node:http"
 import type { AddressInfo } from "node:net"
 import { Hono } from "hono"
 import { afterEach, describe, expect, it, vi } from "vitest"
-import type { Action, ChatAddressedTrigger, HookResponse } from "../src/index.mjs"
+import type {
+    Action,
+    ChatAddressedTrigger,
+    HookResponse,
+    ScratchpadObjectPayload,
+} from "../src/index.mjs"
 import ScribblePubBot, {
+    BACKGROUND_FRAME_ID,
+    FOREGROUND_LAYER_ID,
+    MAX_ACTIONS,
     MAX_LOCAL_ID,
     ScribblePubApiError,
     ScribblePubValidationError,
@@ -695,6 +703,188 @@ describe("sendActions", () => {
             ]),
         ).rejects.toThrow(/invalid actions: actions\.0\.localId/)
         expect(fetchMock).not.toHaveBeenCalled()
+    })
+
+    it("sends drawing actions specified by local IDs", async () => {
+        const fetchMock = stubFetch(Response.json({ ok: true }))
+        const bot = new ScribblePubBot({ token: TOKEN })
+        const line: ScratchpadObjectPayload = {
+            objectType: "line.floats",
+            rgba: 0xff0000ff,
+            lineWidth: 2,
+            points: [10, 10, 90, 90],
+        }
+        const actions = [
+            {
+                type: "sp.putLayer",
+                localId: 1,
+                frameLocalIds: [1, 2, 1],
+                position: { at: "below", layerId: FOREGROUND_LAYER_ID },
+            },
+            {
+                type: "sp.putObject",
+                localId: 1,
+                frameLocalId: 2,
+                ...line,
+            },
+            { type: "sp.putObject", localId: 2, frameId: BACKGROUND_FRAME_ID, ...line },
+            { type: "sp.removeObject", localId: 3 },
+            { type: "sp.removeLayer", localId: 4 },
+        ] as const satisfies Action[]
+
+        await bot.sendActions("main", [...actions])
+
+        const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+        expect(JSON.parse(init.body as string)).toEqual({ actions })
+    })
+
+    it.each([
+        ["a missing local ID", { type: "sp.removeObject" }, /actions\.0\.localId/],
+        ["a zero local ID", { type: "sp.removeLayer", localId: 0 }, /actions\.0\.localId/],
+        [
+            "an empty frame program",
+            { type: "sp.putLayer", localId: 1, frameLocalIds: [] },
+            /frameLocalIds/,
+        ],
+        [
+            "a position above nothing",
+            { type: "sp.putLayer", localId: 1, frameLocalIds: [1], position: { at: "above" } },
+            /position above takes exactly one of layerId or layerLocalId/,
+        ],
+        [
+            "a layer for the top",
+            {
+                type: "sp.putLayer",
+                localId: 1,
+                frameLocalIds: [1],
+                position: { at: "top", layerLocalId: 2 },
+            },
+            /position at top takes no layer/,
+        ],
+        [
+            "a negative layer ID",
+            {
+                type: "sp.putLayer",
+                localId: 1,
+                frameLocalIds: [1],
+                position: { at: "above", layerId: -1 },
+            },
+            /actions\.0\.position\.layerId/,
+        ],
+        [
+            "a frame named both ways",
+            {
+                type: "sp.putObject",
+                localId: 1,
+                frameId: 0,
+                frameLocalId: 1,
+                objectType: "line.floats",
+                rgba: 255,
+                lineWidth: 2,
+                points: [1, 2],
+            },
+            /give exactly one of frameId or frameLocalId/,
+        ],
+        [
+            "an odd number of coordinates",
+            {
+                type: "sp.putObject",
+                localId: 1,
+                frameId: 0,
+                objectType: "line.floats",
+                rgba: 255,
+                lineWidth: 2,
+                points: [1, 2, 3],
+            },
+            /\[x, y] pairs/,
+        ],
+        [
+            "a color beyond 32 bits",
+            {
+                type: "sp.putObject",
+                localId: 1,
+                frameId: 0,
+                objectType: "line.floats",
+                rgba: 2 ** 32,
+                lineWidth: 2,
+                points: [1, 2],
+            },
+            /actions\.0\.rgba/,
+        ],
+    ])("rejects %s without hitting the network", async (_, action, error) => {
+        const fetchMock = stubFetch(Response.json({ ok: true }))
+        const bot = new ScribblePubBot({ token: TOKEN })
+
+        await expect(bot.sendActions("main", [action as Action])).rejects.toThrow(error)
+        expect(fetchMock).not.toHaveBeenCalled()
+    })
+
+    it("rejects a frame local ID given to two layers in one request", async () => {
+        const fetchMock = stubFetch(Response.json({ ok: true }))
+        const bot = new ScribblePubBot({ token: TOKEN })
+
+        await expect(
+            bot.sendActions("main", [
+                { type: "sp.putLayer", localId: 1, frameLocalIds: [1, 2] },
+                { type: "sp.putLayer", localId: 2, frameLocalIds: [2] },
+            ]),
+        ).rejects.toThrow(/actions\.1\.frameLocalIds frame 2 belongs to layer 1/)
+        expect(fetchMock).not.toHaveBeenCalled()
+
+        // Freed by a new program, or by removing the layer.
+        await bot.sendActions("main", [
+            { type: "sp.putLayer", localId: 1, frameLocalIds: [1, 2] },
+            { type: "sp.putLayer", localId: 1, frameLocalIds: [1] },
+            { type: "sp.putLayer", localId: 2, frameLocalIds: [2] },
+            { type: "sp.removeLayer", localId: 1 },
+            { type: "sp.putLayer", localId: 3, frameLocalIds: [1] },
+        ])
+        expect(fetchMock).toHaveBeenCalledOnce()
+    })
+
+    it("rejects requests over the size limits without hitting the network", async () => {
+        const fetchMock = stubFetch(Response.json({ ok: true }))
+        const bot = new ScribblePubBot({ token: TOKEN })
+        const remove = { type: "sp.removeObject", localId: 1 } as const
+        const line = {
+            type: "sp.putObject",
+            localId: 1,
+            frameId: 0,
+            objectType: "line.floats",
+            rgba: 255,
+            lineWidth: 2,
+            points: new Array(4000).fill(123456.789),
+        } as const
+
+        await expect(
+            bot.sendActions("main", new Array(MAX_ACTIONS + 1).fill(remove)),
+        ).rejects.toThrow(/invalid actions: actions/)
+        await expect(bot.sendActions("main", new Array(300).fill(line))).rejects.toThrow(
+            /more than 4194304/,
+        )
+        expect(fetchMock).not.toHaveBeenCalled()
+
+        await bot.sendActions("main", new Array(MAX_ACTIONS).fill(remove))
+        expect(fetchMock).toHaveBeenCalledOnce()
+    })
+
+    it("accepts sp.checkSession only before the other drawing actions", async () => {
+        const fetchMock = stubFetch(Response.json({ ok: true }))
+        const bot = new ScribblePubBot({ token: TOKEN })
+        const check = { type: "sp.checkSession", session: 1784975936 } as const
+
+        await expect(
+            bot.sendActions("main", [{ type: "sp.removeObject", localId: 1 }, check]),
+        ).rejects.toThrow(/actions\.1\.type sp\.checkSession must come before/)
+        expect(fetchMock).not.toHaveBeenCalled()
+
+        // Chat actions don't count.
+        await bot.sendActions("main", [
+            { type: "chat.addMessage", text: "hi" },
+            check,
+            { type: "sp.removeObject", localId: 1 },
+        ])
+        expect(fetchMock).toHaveBeenCalledOnce()
     })
 
     it("throws a catchable ScribblePubValidationError listing every bad field", async () => {
