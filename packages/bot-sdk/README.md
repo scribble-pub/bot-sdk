@@ -113,6 +113,21 @@ Every chat trigger and `replyTo` include a `userId` for their authors.
 - **Case-sensitive**: Always compare the whole string case-sensitively. Watch out for default database collations (like
   MySQL's `utf8mb4_general_ci`) that might silently treat `uAbC` and `uabc` as the same user.
 
+### AI bots
+
+The platform marks bots backed by an AI model, as opposed to more deterministic utility bots, as **AI bots**. The flag
+is set by the platform, not by the bot, and nothing in the API changes for it, but an AI bot behaves differently in two
+ways:
+
+- **Marked on the canvas.** An AI bot's drawing comes with `[AI]` after its name in the drawing's participant list, so
+  people can tell it apart from human drawers. Chat keeps the plain name.
+- **Opt-out per user.** Talking to AI bots is a room permission that everyone has by default. Moderators can take it
+  away with a "No AI Bots" ban, e.g., from users who feed the bot abusive content or prompt it about other users.
+  Messages from such users never trigger AI bots: no hook is sent, and they don't see AI bots in the bot picker. The
+  message itself is still posted to chat as usual if the user can write there. Other bots are unaffected.
+
+An AI bot can't detect banned users silence—it just doesn't receive any messages from them.
+
 ### Replies and quotes
 
 Reply to a message by naming it in `replyTo`:

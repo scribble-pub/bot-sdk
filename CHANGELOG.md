@@ -61,6 +61,10 @@ fire-and-forget. See [Drawing](packages/bot-sdk/README.md#drawing) for the guide
 - **Limits:** `lineWidth` from 0 to 100, from 1 to 2000 points per object, and up to 256 entries in `frameLocalIds`.
   A request or hook response has at most `MAX_ACTIONS` (5000) actions and `MAX_PAYLOAD_BYTES` (4 MB) of JSON, checked
   by the SDK before sending.
+- **AI bots** (see [AI bots](packages/bot-sdk/README.md#ai-bots)), marked as such by the platform:
+  - On the canvas, an AI bot's name in the drawing's participant list ends with `[AI]`. Chat keeps the plain name.
+  - Talking to AI bots is a new room permission, granted to everyone by default. Users who lose it to a "No AI Bots"
+    ban don't trigger AI bots: their messages addressed to them send no `chat.addressed` hook.
 - **Own local IDs in the state:** `sp.layer` contains the bot's `localId` and `frameIdsByLocalId` (its frame local
   IDs to the global ones in `frames`) for its own layers, and `sp.object` its `localId` for its own objects. Other
   bots' local IDs are never shown.
